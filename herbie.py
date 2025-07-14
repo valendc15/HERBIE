@@ -375,8 +375,18 @@ Reglas:
             logger.error(f"Error en petición a GitHub: {e}")
             return None
 
+    def _setup_git_config(self):
+        """Configura Git con las credenciales necesarias"""
+        try:
+            # Configurar usuario (opcional, pero recomendado)
+            subprocess.run(["git", "config", "user.name", self.username], check=True)
+            subprocess.run(["git", "config", "user.email", f"{self.username}@users.noreply.github.com"], check=True)
+            logger.info("Configuración de Git establecida")
+        except Exception as e:
+            logger.warning(f"No se pudo configurar Git: {e}")
+
     def push_local_to_repo(self, repo_name: str) -> bool:
-        """Sube código local a repositorio GitHub"""
+        """Sube código local a repositorio GitHub con autenticación mejorada"""
         try:
             if not os.path.exists(repo_name):
                 logger.error(f"Directorio {repo_name} no existe")
@@ -385,9 +395,15 @@ Reglas:
             original_dir = os.getcwd()
             os.chdir(repo_name)
 
+            # Configurar Git
+            self._setup_git_config()
+
+            # URL con token para autenticación
+            repo_url = f"https://{self.github_token}@github.com/{self.username}/{repo_name}.git"
+
             commands = [
                 ["git", "init"],
-                ["git", "remote", "add", "origin", f"https://github.com/{self.username}/{repo_name}.git"],
+                ["git", "remote", "add", "origin", repo_url],
                 ["git", "add", "."],
                 ["git", "commit", "-m", "Initial commit - Created by Herbie Agent"],
                 ["git", "branch", "-M", "main"],
@@ -395,12 +411,34 @@ Reglas:
             ]
 
             for cmd in commands:
-                logger.info(f"Ejecutando: {' '.join(cmd)}")
-                result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+                # Ocultar token en los logs
+                log_cmd = cmd.copy()
+                if len(log_cmd) > 2 and "github.com" in log_cmd[2]:
+                    log_cmd[2] = log_cmd[2].replace(self.github_token, "***TOKEN***")
+
+                logger.info(f"Ejecutando: {' '.join(log_cmd)}")
+
+                # Configurar entorno para evitar prompts interactivos
+                env = os.environ.copy()
+                env['GIT_TERMINAL_PROMPT'] = '0'
+
+                result = subprocess.run(
+                    cmd,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                    timeout=60
+                )
 
             os.chdir(original_dir)
+            logger.info("Código subido exitosamente a GitHub")
             return True
 
+        except subprocess.TimeoutExpired:
+            logger.error("Timeout: El comando git tomó demasiado tiempo")
+            os.chdir(original_dir)
+            return False
         except subprocess.CalledProcessError as e:
             logger.error(f"Error en comando git: {e.stderr}")
             os.chdir(original_dir)
@@ -408,6 +446,57 @@ Reglas:
         except Exception as e:
             logger.error(f"Error subiendo a GitHub: {e}")
             os.chdir(original_dir)
+            return False
+
+    def push_local_to_repo_alternative(self, repo_name: str) -> bool:
+        """Método alternativo usando la API de GitHub para subir archivos"""
+        try:
+            if not os.path.exists(repo_name):
+                logger.error(f"Directorio {repo_name} no existe")
+                return False
+
+            logger.info("Usando método alternativo: GitHub API")
+
+            # Recorrer archivos del proyecto
+            for root, dirs, files in os.walk(repo_name):
+                # Ignorar directorios como .git, node_modules, etc.
+                dirs[:] = [d for d in dirs if not d.startswith('.') and d != 'node_modules']
+
+                for file in files:
+                    if file.startswith('.'):
+                        continue
+
+                    file_path = os.path.join(root, file)
+                    relative_path = os.path.relpath(file_path, repo_name)
+
+                    # Leer archivo
+                    try:
+                        with open(file_path, 'rb') as f:
+                            content = f.read()
+
+                        # Codificar en base64
+                        encoded_content = base64.b64encode(content).decode('utf-8')
+
+                        # Subir via API
+                        url = f"https://api.github.com/repos/{self.username}/{repo_name}/contents/{relative_path}"
+                        data = {
+                            "message": f"Add {relative_path}",
+                            "content": encoded_content
+                        }
+
+                        response = requests.put(url, headers=self.headers, json=data)
+                        if response.status_code not in [200, 201]:
+                            logger.warning(f"Error subiendo {relative_path}: {response.status_code}")
+
+                    except Exception as e:
+                        logger.warning(f"Error procesando archivo {file_path}: {e}")
+                        continue
+
+            logger.info("Archivos subidos via API de GitHub")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error en método alternativo: {e}")
             return False
 
     def create_full_flow(self, user_input: str) -> Dict:
@@ -444,6 +533,8 @@ Reglas:
                 return {"success": False, "message": "No se pudo crear el repositorio en GitHub"}
 
             print("📤 Subiendo código a GitHub...")
+
+            # Intentar método principal con Git
             if self.push_local_to_repo(project_info.repo_name):
                 print(f"🎉 ¡Repositorio listo! {repo['html_url']}")
                 return {
@@ -452,8 +543,18 @@ Reglas:
                     "project_info": project_info
                 }
             else:
-                print("⚠️  Repositorio creado pero no se pudo subir el código")
-                return {"success": False, "message": "Error subiendo código a GitHub"}
+                print("⚠️  Método Git falló, intentando método alternativo...")
+                # Intentar método alternativo con API
+                if self.push_local_to_repo_alternative(project_info.repo_name):
+                    print(f"🎉 ¡Repositorio listo! {repo['html_url']}")
+                    return {
+                        "success": True,
+                        "repo_url": repo['html_url'],
+                        "project_info": project_info
+                    }
+                else:
+                    print("⚠️  Repositorio creado pero no se pudo subir el código")
+                    return {"success": False, "message": "Error subiendo código a GitHub"}
 
         except Exception as e:
             logger.error(f"Error en flujo completo: {e}")
