@@ -502,58 +502,39 @@ Reglas:
     def create_full_flow(self, user_input: str) -> Dict:
         """Flujo completo de creación de repositorio"""
         try:
-            print("🔍 Analizando tu mensaje...")
             project_info = self.parse_user_input(user_input)
 
-            print(f"📋 Proyecto: {project_info.repo_name}")
-            print(f"🛠️  Framework: {project_info.framework}")
-            print(f"🔒 Privado: {'Sí' if project_info.is_private else 'No'}")
-
-            print("\n⚙️ Inicializando proyecto local...")
+            # Inicializar proyecto local
             framework_result = self.framework_helper.init_framework_project(project_info)
 
             if not framework_result['success']:
-                print("❗ No se pudo inicializar el proyecto localmente.")
-                print(framework_result['message'])
+                return {
+                    "success": False,
+                    "message": framework_result['message'],
+                    "install_md": framework_result.get('install_md')
+                }
 
-                if 'install_md' in framework_result:
-                    install_file = f"{project_info.repo_name}_INSTALL.md"
-                    with open(install_file, "w", encoding="utf-8") as f:
-                        f.write(framework_result['install_md'])
-                    print(f"📄 Archivo de instalación creado: {install_file}")
-
-                return {"success": False, "message": framework_result['message']}
-
-            print("✅ Proyecto inicializado localmente")
-
-            print("\n📦 Creando repositorio en GitHub...")
+            # Crear repositorio
             repo = self.create_repository(project_info)
-
             if not repo:
                 return {"success": False, "message": "No se pudo crear el repositorio en GitHub"}
 
-            print("📤 Subiendo código a GitHub...")
-
-            # Intentar método principal con Git
+            # Subir código
             if self.push_local_to_repo(project_info.repo_name):
-                print(f"🎉 ¡Repositorio listo! {repo['html_url']}")
                 return {
                     "success": True,
                     "repo_url": repo['html_url'],
                     "project_info": project_info
                 }
             else:
-                print("⚠️  Método Git falló, intentando método alternativo...")
-                # Intentar método alternativo con API
+                # Intentar método alternativo
                 if self.push_local_to_repo_alternative(project_info.repo_name):
-                    print(f"🎉 ¡Repositorio listo! {repo['html_url']}")
                     return {
                         "success": True,
                         "repo_url": repo['html_url'],
                         "project_info": project_info
                     }
                 else:
-                    print("⚠️  Repositorio creado pero no se pudo subir el código")
                     return {"success": False, "message": "Error subiendo código a GitHub"}
 
         except Exception as e:
@@ -561,33 +542,164 @@ Reglas:
             return {"success": False, "message": f"Error: {str(e)}"}
 
 
+class HerbieAgent:
+    def __init__(self):
+        self.repo_creator = GitHubRepoCreator()
+        self.conversation_history = []
+
+    def chat(self, user_input: str) -> str:
+        """Manejar conversación con el usuario"""
+
+        # Añadir al historial
+        self.conversation_history.append({"role": "user", "content": user_input})
+
+        # Analizar si el usuario quiere crear un repositorio
+        create_keywords = ["crea", "crear", "nuevo", "repositorio", "repo", "github", "proyecto"]
+
+        if any(keyword in user_input.lower() for keyword in create_keywords):
+            return self._handle_repository_creation(user_input)
+        else:
+            return self._general_response(user_input)
+
+    def _handle_repository_creation(self, user_input: str) -> str:
+        """Manejar la creación de repositorios"""
+        try:
+            print("🔍 Analizando tu solicitud...")
+
+            # Parsear información del proyecto
+            project_info = self.repo_creator.parse_user_input(user_input)
+
+            # Mostrar información extraída
+            print(f"📋 Información del proyecto:")
+            print(f"   - Nombre: {project_info.repo_name}")
+            print(f"   - Framework: {project_info.framework}")
+            print(f"   - Tipo: {'Privado' if project_info.is_private else 'Público'}")
+            print(f"   - Descripción: {project_info.description[:100]}...")
+
+            # Confirmar con el usuario
+            confirm = input("\n¿Confirmas la creación del repositorio? (s/n): ").lower().strip()
+
+            if confirm not in ['s', 'si', 'y', 'yes']:
+                return "❌ Creación cancelada. Puedes intentar de nuevo con otra descripción."
+
+            print("\n⚙️ Iniciando creación del proyecto...")
+
+            # Crear el repositorio
+            result = self.repo_creator.create_full_flow(user_input)
+
+            if result['success']:
+                privacy_text = "privado" if project_info.is_private else "público"
+                response = f"""✅ ¡Repositorio creado exitosamente!
+
+📁 Nombre: {project_info.repo_name}
+🛠️  Framework: {project_info.framework}
+🔒 Tipo: {privacy_text}
+🌐 URL: {result['repo_url']}
+
+¡Tu proyecto está listo para usar! Ya puedes clonarlo y empezar a trabajar."""
+
+                self.conversation_history.append({"role": "assistant", "content": response})
+                return response
+            else:
+                if 'install_md' in result:
+                    install_file = f"{project_info.repo_name}_INSTALL.md"
+                    with open(install_file, "w", encoding="utf-8") as f:
+                        f.write(result['install_md'])
+                    response = f"""❌ No se pudo crear el proyecto completo.
+
+{result['message']}
+
+📄 He creado un archivo de instalación: {install_file}
+Revisa las instrucciones para configurar el framework correctamente."""
+                else:
+                    response = f"❌ Error: {result['message']}"
+
+                self.conversation_history.append({"role": "assistant", "content": response})
+                return response
+
+        except Exception as e:
+            error_msg = f"❌ Error procesando tu solicitud: {str(e)}"
+            self.conversation_history.append({"role": "assistant", "content": error_msg})
+            return error_msg
+
+    def _general_response(self, user_input: str) -> str:
+        """Respuesta conversacional general"""
+
+        help_keywords = ["ayuda", "help", "como", "qué puedes hacer", "comandos"]
+
+        if any(keyword in user_input.lower() for keyword in help_keywords):
+            response = """🤖 ¡Hola! Soy Herbie, tu asistente inteligente para crear repositorios de GitHub.
+
+Puedo ayudarte a:
+✅ Crear repositorios públicos o privados
+✅ Inicializar proyectos con diferentes frameworks
+✅ Configurar el código inicial automáticamente
+✅ Subir todo a GitHub listo para usar
+
+🛠️ Frameworks soportados:
+React, Vue, Angular, Next.js, Django, FastAPI, Rails, Flutter
+
+💬 Ejemplos de uso:
+• "Crea un repositorio público llamado 'mi-blog' con React"
+• "Necesito un proyecto privado 'tienda-online' usando Next.js"
+• "Haz un repo 'mi-api' con FastAPI para una REST API"
+
+¿Qué proyecto quieres crear hoy?"""
+        else:
+            response = """¡Hola! 👋 
+
+Soy Herbie, tu asistente para crear repositorios de GitHub con frameworks populares.
+
+Puedo ayudarte a crear un proyecto completo desde cero. Solo dime:
+- Qué tipo de proyecto quieres crear
+- Qué framework prefieres usar
+- Si quieres que sea público o privado
+
+Escribe 'ayuda' para ver ejemplos de uso.
+
+¿En qué proyecto estás pensando?"""
+
+        self.conversation_history.append({"role": "assistant", "content": response})
+        return response
+
+
 def main():
-    print("🤖 ¡Hola! Soy Herbie, tu asistente inteligente para crear repositorios de GitHub.")
-    print("Puedo ayudarte a crear proyectos con diferentes frameworks y subirlos automáticamente.")
-    print("Frameworks soportados:", ", ".join(FrameworkDatabase.FRAMEWORKS.keys()))
+    """Función principal para interactuar con el usuario"""
+
+    print("🤖 Herbie - Asistente Inteligente para GitHub")
+    print("=" * 50)
 
     try:
-        print("\n¿Qué proyecto vamos a crear hoy?")
-        user_input = input("📝 Describe tu proyecto: ")
+        # Inicializar el agente
+        agent = HerbieAgent()
 
-        if not user_input.strip():
-            print("❌ Por favor, describe el proyecto que quieres crear.")
-            return
+        print("\n¡Hola! Soy Herbie, tu asistente para crear repositorios de GitHub.")
+        print("Puedo ayudarte a crear proyectos completos con diferentes frameworks.")
+        print("Todo se configura automáticamente y se sube a GitHub listo para usar.")
+        print("\nEscribe 'ayuda' para ver qué puedo hacer o 'salir' para terminar.")
 
-        agent = GitHubRepoCreator()
-        result = agent.create_full_flow(user_input)
+        while True:
+            user_input = input("\n📝 Tú: ").strip()
 
-        if result["success"]:
-            print(f"\n✨ ¡Proyecto creado exitosamente!")
-            print(f"🔗 URL: {result['repo_url']}")
-        else:
-            print(f"\n❌ {result['message']}")
+            if user_input.lower() in ['salir', 'exit', 'quit']:
+                print("👋 ¡Hasta luego! Que tengas un buen día.")
+                break
+
+            if not user_input:
+                print("Por favor, dime qué quieres hacer.")
+                continue
+
+            print()
+            response = agent.chat(user_input)
+            print(f"🤖 Herbie: {response}")
 
     except KeyboardInterrupt:
         print("\n\n👋 ¡Hasta luego!")
     except Exception as e:
-        print(f"\n❌ Error inesperado: {e}")
-        logger.error(f"Error en main: {e}")
+        print(f"\n❌ Error inicializando Herbie: {e}")
+        print("\nAsegúrate de tener las variables de entorno configuradas:")
+        print("- GITHUB_TOKEN: Token de GitHub con permisos de repositorio")
+        print("- GOOGLE_API_KEY: API key de Google Generative AI")
 
 
 if __name__ == "__main__":
