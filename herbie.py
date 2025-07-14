@@ -1,105 +1,362 @@
 import os
 import requests
 import json
-from dotenv import load_dotenv
-from langchain.tools import tool
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.schema import HumanMessage, SystemMessage
-from langchain.prompts import PromptTemplate
 import base64
+import shutil
+import subprocess
+import platform
+import logging
+from pathlib import Path
+from typing import Dict, Optional, List
+from dataclasses import dataclass
+from dotenv import load_dotenv
+from langchain.schema import HumanMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
+
+# Configurar logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('herbie.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # Cargar variables de entorno
 load_dotenv()
 
 
+@dataclass
+class ProjectInfo:
+    repo_name: str
+    description: str
+    is_private: bool
+    framework: str
+    init_command: str
+    additional_setup: Optional[List[str]] = None
+
+
+class FrameworkDatabase:
+    """Base de conocimiento de frameworks con comandos y configuraciones"""
+
+    FRAMEWORKS = {
+        "react": {
+            "commands": ["npx create-react-app", "npm create vite@latest"],
+            "check_cmd": "node",
+            "package_managers": ["npm", "yarn", "pnpm"],
+            "install_instructions": {
+                "windows": "Instala Node.js desde https://nodejs.org/",
+                "linux": "sudo apt-get install nodejs npm",
+                "darwin": "brew install node"
+            }
+        },
+        "vue": {
+            "commands": ["npm create vue@latest", "vue create"],
+            "check_cmd": "node",
+            "package_managers": ["npm", "yarn", "pnpm"],
+            "install_instructions": {
+                "windows": "Instala Node.js desde https://nodejs.org/",
+                "linux": "sudo apt-get install nodejs npm",
+                "darwin": "brew install node"
+            }
+        },
+        "angular": {
+            "commands": ["ng new"],
+            "check_cmd": "ng",
+            "package_managers": ["npm", "yarn"],
+            "install_instructions": {
+                "windows": "npm install -g @angular/cli",
+                "linux": "sudo npm install -g @angular/cli",
+                "darwin": "npm install -g @angular/cli"
+            }
+        },
+        "rails": {
+            "commands": ["rails new"],
+            "check_cmd": "rails",
+            "package_managers": ["gem", "bundle"],
+            "install_instructions": {
+                "windows": "Instala Ruby desde https://rubyinstaller.org/",
+                "linux": "sudo apt-get install ruby-full",
+                "darwin": "brew install ruby"
+            }
+        },
+        "django": {
+            "commands": ["django-admin startproject"],
+            "check_cmd": "django-admin",
+            "package_managers": ["pip", "poetry"],
+            "install_instructions": {
+                "windows": "pip install django",
+                "linux": "pip install django",
+                "darwin": "pip install django"
+            }
+        },
+        "fastapi": {
+            "commands": ["fastapi-cli new"],
+            "check_cmd": "fastapi-cli",
+            "package_managers": ["pip", "poetry"],
+            "install_instructions": {
+                "windows": "pip install fastapi-cli",
+                "linux": "pip install fastapi-cli",
+                "darwin": "pip install fastapi-cli"
+            }
+        },
+        "nextjs": {
+            "commands": ["npx create-next-app@latest"],
+            "check_cmd": "node",
+            "package_managers": ["npm", "yarn", "pnpm"],
+            "install_instructions": {
+                "windows": "Instala Node.js desde https://nodejs.org/",
+                "linux": "sudo apt-get install nodejs npm",
+                "darwin": "brew install node"
+            }
+        },
+        "flutter": {
+            "commands": ["flutter create"],
+            "check_cmd": "flutter",
+            "package_managers": ["pub"],
+            "install_instructions": {
+                "windows": "Descarga Flutter SDK desde https://flutter.dev/docs/get-started/install/windows",
+                "linux": "sudo snap install flutter --classic",
+                "darwin": "brew install flutter"
+            }
+        }
+    }
+
+    @classmethod
+    def get_framework_info(cls, framework: str) -> Optional[Dict]:
+        return cls.FRAMEWORKS.get(framework.lower())
+
+
+class HerbieFrameworkHelper:
+    def __init__(self, llm):
+        self.llm = llm
+        self.system_info = {
+            "os": platform.system().lower(),
+            "version": platform.release(),
+            "architecture": platform.machine()
+        }
+
+    def check_command(self, cmd: str) -> bool:
+        """Verifica si un comando está disponible en el sistema"""
+        return shutil.which(cmd) is not None
+
+    def check_framework_requirements(self, framework: str) -> Dict:
+        """Verifica si los requisitos del framework están instalados"""
+        framework_info = FrameworkDatabase.get_framework_info(framework)
+        if not framework_info:
+            return {"available": False, "reason": "Framework no reconocido"}
+
+        check_cmd = framework_info["check_cmd"]
+        if self.check_command(check_cmd):
+            return {"available": True}
+
+        return {
+            "available": False,
+            "reason": f"Comando '{check_cmd}' no encontrado",
+            "framework_info": framework_info
+        }
+
+    def explain_missing_dependency(self, framework: str) -> str:
+        """Genera explicación detallada sobre dependencias faltantes"""
+        framework_info = FrameworkDatabase.get_framework_info(framework)
+        if not framework_info:
+            return "Framework no reconocido. Verifique el nombre del framework."
+
+        system = self.system_info["os"]
+        install_cmd = framework_info["install_instructions"].get(system, "Consulte la documentación oficial")
+
+        prompt = f"""
+Como experto en desarrollo de software, explica de forma clara y profesional:
+
+Framework: {framework}
+Sistema operativo: {system}
+Comando de instalación sugerido: {install_cmd}
+
+Proporciona:
+1. Explicación breve del problema
+2. Pasos específicos de instalación para {system}
+3. Comandos exactos a ejecutar
+4. Verificación de instalación exitosa
+5. Posibles problemas comunes y soluciones
+
+Mantén un tono profesional y educativo, como si fueras un profesor de ingeniería de software.
+"""
+
+        response = self.llm.invoke([HumanMessage(content=prompt)])
+        return response.content
+
+    def generate_install_md(self, framework: str) -> str:
+        """Genera archivo INSTALL.md completo"""
+        framework_info = FrameworkDatabase.get_framework_info(framework)
+        system = self.system_info["os"]
+
+        prompt = f"""
+Como profesor de ingeniería de software, crea un archivo INSTALL.md profesional y completo para un proyecto {framework} en {system}.
+
+Incluye:
+1. Título y descripción del proyecto
+2. Requisitos del sistema
+3. Instalación paso a paso
+4. Configuración del entorno de desarrollo
+5. Comandos para ejecutar el proyecto
+6. Solución de problemas comunes
+7. Recursos adicionales
+
+Estructura del framework disponible: {json.dumps(framework_info, indent=2)}
+
+Usa formato Markdown profesional con emojis apropiados.
+"""
+
+        response = self.llm.invoke([HumanMessage(content=prompt)])
+        return response.content
+
+    def init_framework_project(self, project_info: ProjectInfo) -> Dict:
+        """Inicializa proyecto con el framework especificado"""
+        logger.info(f"Iniciando proyecto {project_info.repo_name} con framework {project_info.framework}")
+
+        # Verificar requisitos
+        requirements_check = self.check_framework_requirements(project_info.framework)
+        if not requirements_check["available"]:
+            return {
+                "success": False,
+                "message": self.explain_missing_dependency(project_info.framework),
+                "install_md": self.generate_install_md(project_info.framework)
+            }
+
+        # Ejecutar comando de inicialización
+        try:
+            logger.info(f"Ejecutando: {project_info.init_command}")
+            result = subprocess.run(
+                project_info.init_command.split(),
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=300  # 5 minutos timeout
+            )
+
+            # Ejecutar comandos adicionales si existen
+            if project_info.additional_setup:
+                os.chdir(project_info.repo_name)
+                for cmd in project_info.additional_setup:
+                    logger.info(f"Ejecutando setup adicional: {cmd}")
+                    subprocess.run(cmd.split(), check=True)
+                os.chdir("..")
+
+            return {"success": True, "output": result.stdout}
+
+        except subprocess.TimeoutExpired:
+            return {"success": False, "message": "Timeout: El comando tomó demasiado tiempo"}
+        except subprocess.CalledProcessError as e:
+            return {"success": False, "message": f"Error al ejecutar el comando: {e.stderr}"}
+        except Exception as e:
+            return {"success": False, "message": f"Error inesperado: {str(e)}"}
+
+
 class GitHubRepoCreator:
     def __init__(self):
-        # Configurar API keys
         self.github_token = os.getenv('GITHUB_TOKEN')
         self.google_api_key = os.getenv('GOOGLE_API_KEY')
 
         if not self.github_token:
-            raise ValueError("GITHUB_TOKEN no encontrado en las variables de entorno")
+            raise ValueError("GITHUB_TOKEN es requerido")
         if not self.google_api_key:
-            raise ValueError("GOOGLE_API_KEY no encontrado en las variables de entorno")
+            raise ValueError("GOOGLE_API_KEY es requerido")
 
-        # Inicializar el modelo de Google Generative AI
         self.llm = ChatGoogleGenerativeAI(
             model="gemini-1.5-flash",
             google_api_key=self.google_api_key,
-            temperature=0.7
+            temperature=0.3  # Reducir temperatura para más consistencia
         )
 
-        # Headers para GitHub API
         self.headers = {
             'Authorization': f'token {self.github_token}',
             'Accept': 'application/vnd.github.v3+json',
             'Content-Type': 'application/json'
         }
 
-    def generate_readme(self, project_description, repo_name):
-        """Generar README.md usando Google Generative AI"""
+        self.framework_helper = HerbieFrameworkHelper(self.llm)
+        self.username = self._get_username()
+
+    def _get_username(self) -> str:
+        """Obtiene el nombre de usuario de GitHub"""
+        try:
+            res = requests.get("https://api.github.com/user", headers=self.headers, timeout=10)
+            if res.status_code == 200:
+                return res.json().get('login', 'unknown-user')
+            else:
+                logger.warning(f"Error obteniendo usuario: {res.status_code}")
+                return 'unknown-user'
+        except Exception as e:
+            logger.error(f"Error conectando con GitHub: {e}")
+            return 'unknown-user'
+
+    def parse_user_input(self, user_input: str) -> ProjectInfo:
+        """Parsea entrada del usuario usando IA"""
+        frameworks_list = list(FrameworkDatabase.FRAMEWORKS.keys())
 
         prompt = f"""
-        Genera un README.md profesional y completo para un proyecto de GitHub con las siguientes características:
+Analiza este mensaje del usuario y extrae información para crear un proyecto:
+"{user_input}"
 
-        Nombre del repositorio: {repo_name}
-        Descripción del proyecto: {project_description}
+Frameworks disponibles: {frameworks_list}
 
-        El README debe incluir:
-        1. Título del proyecto
-        2. Descripción clara y concisa
-        3. Características principales
-        4. Instalación (si aplica)
-        5. Uso básico (si aplica)
-        6. Contribuciones
-        7. Licencia
-        8. Contacto/Autor
+Responde SOLO con un JSON válido con esta estructura exacta:
+{{
+  "repo_name": "nombre-del-repositorio",
+  "is_private": true/false,
+  "description": "descripción del proyecto",
+  "framework": "framework-elegido",
+  "init_command": "comando-para-inicializar",
+  "additional_setup": ["comando1", "comando2"] o null
+}}
 
-        Usa formato Markdown y hazlo profesional pero accesible. 
-        Adapta el contenido según el tipo de proyecto que describas.
-        Responde únicamente con el contenido del README en formato Markdown.
-        """
+Reglas:
+- repo_name: sin espacios, guiones bajos o caracteres especiales
+- framework: debe ser uno de la lista disponible
+- init_command: comando completo con argumentos
+- Si no se especifica privacidad, usa false
+- Si falta información, usa valores razonables
+"""
 
         try:
             response = self.llm.invoke([HumanMessage(content=prompt)])
-            return response.content
+            content = response.content.strip()
+
+            # Extraer JSON del contenido
+            start = content.find('{')
+            end = content.rfind('}') + 1
+
+            if start == -1 or end == 0:
+                raise ValueError("No se encontró JSON válido en la respuesta")
+
+            json_str = content[start:end]
+            data = json.loads(json_str)
+
+            return ProjectInfo(
+                repo_name=data['repo_name'],
+                description=data['description'],
+                is_private=data['is_private'],
+                framework=data['framework'],
+                init_command=data['init_command'],
+                additional_setup=data.get('additional_setup')
+            )
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Error parseando JSON: {e}")
+            raise ValueError("No se pudo interpretar la respuesta de la IA")
         except Exception as e:
-            print(f"Error generando README: {e}")
-            return self._default_readme(repo_name, project_description)
+            logger.error(f"Error procesando entrada: {e}")
+            raise ValueError("Error procesando la entrada del usuario")
 
-    def _default_readme(self, repo_name, description):
-        """README básico en caso de error"""
-        return f"""# {repo_name}
-
-## Descripción
-{description}
-
-## Instalación
-```bash
-git clone https://github.com/tu-usuario/{repo_name}.git
-cd {repo_name}
-```
-
-## Uso
-Describe aquí cómo usar el proyecto.
-
-## Contribuciones
-Las contribuciones son bienvenidas. Por favor, abre un issue primero para discutir los cambios.
-
-## Licencia
-Este proyecto está bajo la Licencia MIT.
-"""
-
-    def create_repository(self, repo_name, description, is_private=False):
-        """Crear repositorio en GitHub"""
-
+    def create_repository(self, project_info: ProjectInfo) -> Optional[Dict]:
+        """Crea repositorio en GitHub"""
         url = "https://api.github.com/user/repos"
-
         data = {
-            "name": repo_name,
-            "description": description,
-            "private": is_private,
+            "name": project_info.repo_name,
+            "description": project_info.description,
+            "private": project_info.is_private,
             "has_issues": True,
             "has_projects": True,
             "has_wiki": True,
@@ -107,290 +364,129 @@ Este proyecto está bajo la Licencia MIT.
         }
 
         try:
-            response = requests.post(url, headers=self.headers, json=data)
-
-            if response.status_code == 201:
-                repo_data = response.json()
-                print(f"✅ Repositorio '{repo_name}' creado exitosamente!")
-                print(f"URL: {repo_data['html_url']}")
-                return repo_data
+            res = requests.post(url, headers=self.headers, json=data, timeout=30)
+            if res.status_code == 201:
+                logger.info(f"Repositorio '{project_info.repo_name}' creado exitosamente")
+                return res.json()
             else:
-                print(f"❌ Error creando repositorio: {response.status_code}")
-                print(f"Respuesta: {response.text}")
+                logger.error(f"Error creando repositorio: {res.status_code} - {res.text}")
                 return None
-
         except Exception as e:
-            print(f"❌ Error en la solicitud: {e}")
+            logger.error(f"Error en petición a GitHub: {e}")
             return None
 
-    def upload_readme(self, repo_name, readme_content):
-        """Subir README.md al repositorio"""
-
-        # Obtener información del usuario
-        user_response = requests.get("https://api.github.com/user", headers=self.headers)
-        if user_response.status_code != 200:
-            print("❌ Error obteniendo información del usuario")
-            return False
-
-        username = user_response.json()['login']
-
-        # URL para crear el archivo README
-        url = f"https://api.github.com/repos/{username}/{repo_name}/contents/README.md"
-
-        # Codificar el contenido en base64
-        encoded_content = base64.b64encode(readme_content.encode()).decode()
-
-        data = {
-            "message": "Add README.md",
-            "content": encoded_content
-        }
-
+    def push_local_to_repo(self, repo_name: str) -> bool:
+        """Sube código local a repositorio GitHub"""
         try:
-            response = requests.put(url, headers=self.headers, json=data)
-
-            if response.status_code == 201:
-                print("✅ README.md subido exitosamente!")
-                return True
-            else:
-                print(f"❌ Error subiendo README: {response.status_code}")
-                print(f"Respuesta: {response.text}")
+            if not os.path.exists(repo_name):
+                logger.error(f"Directorio {repo_name} no existe")
                 return False
 
+            original_dir = os.getcwd()
+            os.chdir(repo_name)
+
+            commands = [
+                ["git", "init"],
+                ["git", "remote", "add", "origin", f"https://github.com/{self.username}/{repo_name}.git"],
+                ["git", "add", "."],
+                ["git", "commit", "-m", "Initial commit - Created by Herbie Agent"],
+                ["git", "branch", "-M", "main"],
+                ["git", "push", "-u", "origin", "main"]
+            ]
+
+            for cmd in commands:
+                logger.info(f"Ejecutando: {' '.join(cmd)}")
+                result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+
+            os.chdir(original_dir)
+            return True
+
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Error en comando git: {e.stderr}")
+            os.chdir(original_dir)
+            return False
         except Exception as e:
-            print(f"❌ Error subiendo README: {e}")
+            logger.error(f"Error subiendo a GitHub: {e}")
+            os.chdir(original_dir)
             return False
 
-
-class GitHubAgent:
-    def __init__(self):
-        self.repo_creator = GitHubRepoCreator()
-        self.conversation_history = []
-
-    def parse_user_input(self, user_input):
-        """Analizar y extraer información del input del usuario"""
-
-        analysis_prompt = f"""
-        Analiza el siguiente mensaje del usuario y extrae la información para crear un repositorio de GitHub:
-
-        Mensaje: "{user_input}"
-
-        Extrae:
-        1. Nombre del repositorio
-        2. Si debe ser privado o público
-        3. Descripción del proyecto
-
-        Responde en formato JSON exacto:
-        {{
-            "repo_name": "nombre_del_repositorio",
-            "is_private": true/false,
-            "description": "descripción detallada del proyecto"
-        }}
-
-        Si la información no está clara, haz suposiciones razonables.
-        Si no se especifica privacidad, asume que es público.
-        """
-
+    def create_full_flow(self, user_input: str) -> Dict:
+        """Flujo completo de creación de repositorio"""
         try:
-            response = self.repo_creator.llm.invoke([HumanMessage(content=analysis_prompt)])
+            print("🔍 Analizando tu mensaje...")
+            project_info = self.parse_user_input(user_input)
 
-            # Limpiar la respuesta para extraer solo el JSON
-            content = response.content.strip()
+            print(f"📋 Proyecto: {project_info.repo_name}")
+            print(f"🛠️  Framework: {project_info.framework}")
+            print(f"🔒 Privado: {'Sí' if project_info.is_private else 'No'}")
 
-            # Buscar el JSON en la respuesta
-            start = content.find('{')
-            end = content.rfind('}') + 1
+            print("\n⚙️ Inicializando proyecto local...")
+            framework_result = self.framework_helper.init_framework_project(project_info)
 
-            if start != -1 and end != -1:
-                json_str = content[start:end]
-                return json.loads(json_str)
+            if not framework_result['success']:
+                print("❗ No se pudo inicializar el proyecto localmente.")
+                print(framework_result['message'])
+
+                if 'install_md' in framework_result:
+                    install_file = f"{project_info.repo_name}_INSTALL.md"
+                    with open(install_file, "w", encoding="utf-8") as f:
+                        f.write(framework_result['install_md'])
+                    print(f"📄 Archivo de instalación creado: {install_file}")
+
+                return {"success": False, "message": framework_result['message']}
+
+            print("✅ Proyecto inicializado localmente")
+
+            print("\n📦 Creando repositorio en GitHub...")
+            repo = self.create_repository(project_info)
+
+            if not repo:
+                return {"success": False, "message": "No se pudo crear el repositorio en GitHub"}
+
+            print("📤 Subiendo código a GitHub...")
+            if self.push_local_to_repo(project_info.repo_name):
+                print(f"🎉 ¡Repositorio listo! {repo['html_url']}")
+                return {
+                    "success": True,
+                    "repo_url": repo['html_url'],
+                    "project_info": project_info
+                }
             else:
-                # Si no se encuentra JSON, parsear manualmente
-                return self._manual_parse(user_input)
+                print("⚠️  Repositorio creado pero no se pudo subir el código")
+                return {"success": False, "message": "Error subiendo código a GitHub"}
 
         except Exception as e:
-            print(f"Error analizando input: {e}")
-            return self._manual_parse(user_input)
-
-    def _manual_parse(self, user_input):
-        """Parseo manual básico como fallback"""
-
-        # Convertir a minúsculas para análisis
-        lower_input = user_input.lower()
-
-        # Determinar si es privado
-        is_private = "privado" in lower_input or "private" in lower_input
-
-        # Extraer nombre del repositorio (buscar patrones comunes)
-        repo_name = "mi-proyecto"
-        words = user_input.split()
-        for i, word in enumerate(words):
-            if word.lower() in ["llamado", "named", "nombre", "repositorio"]:
-                if i + 1 < len(words):
-                    repo_name = words[i + 1].strip('"\'')
-                    break
-
-        return {
-            "repo_name": repo_name,
-            "is_private": is_private,
-            "description": user_input
-        }
-
-    def create_repository_workflow(self, repo_info):
-        """Workflow completo para crear repositorio"""
-
-        try:
-            # Crear el repositorio
-            repo_data = self.repo_creator.create_repository(
-                repo_info["repo_name"],
-                repo_info["description"],
-                repo_info["is_private"]
-            )
-
-            if not repo_data:
-                return "❌ Error creando el repositorio en GitHub"
-
-            # Generar README
-            print("🔄 Generando README.md...")
-            readme_content = self.repo_creator.generate_readme(
-                repo_info["description"],
-                repo_info["repo_name"]
-            )
-
-            # Subir README
-            print("📤 Subiendo README.md...")
-            success = self.repo_creator.upload_readme(
-                repo_info["repo_name"],
-                readme_content
-            )
-
-            if success:
-                privacy_text = "privado" if repo_info["is_private"] else "público"
-                return f"""✅ ¡Repositorio creado exitosamente!
-
-📁 Nombre: {repo_info["repo_name"]}
-🔒 Tipo: {privacy_text}
-📝 README.md: Generado y subido
-🌐 URL: https://github.com/{self._get_username()}/{repo_info["repo_name"]}
-
-El README ha sido generado automáticamente basándose en tu descripción del proyecto."""
-            else:
-                return f"✅ Repositorio '{repo_info['repo_name']}' creado, pero hubo un error subiendo el README"
-
-        except Exception as e:
-            return f"❌ Error en el proceso: {str(e)}"
-
-    def _get_username(self):
-        """Obtener el username de GitHub"""
-        try:
-            response = requests.get("https://api.github.com/user", headers=self.repo_creator.headers)
-            if response.status_code == 200:
-                return response.json()['login']
-            else:
-                return "tu-usuario"
-        except:
-            return "tu-usuario"
-
-    def chat(self, user_input):
-        """Manejar conversación con el usuario"""
-
-        # Añadir al historial
-        self.conversation_history.append({"role": "user", "content": user_input})
-
-        # Analizar si el usuario quiere crear un repositorio
-        create_keywords = ["crea", "crear", "nuevo", "repositorio", "repo", "github"]
-
-        if any(keyword in user_input.lower() for keyword in create_keywords):
-            # Procesar creación de repositorio
-            print("🔄 Analizando tu solicitud...")
-            repo_info = self.parse_user_input(user_input)
-
-            print(f"📋 Información extraída:")
-            print(f"   - Nombre: {repo_info['repo_name']}")
-            print(f"   - Tipo: {'Privado' if repo_info['is_private'] else 'Público'}")
-            print(f"   - Descripción: {repo_info['description'][:100]}...")
-
-            # Confirmar con el usuario
-            confirm = input("\n¿Confirmas la creación? (s/n): ").lower().strip()
-
-            if confirm in ['s', 'si', 'y', 'yes']:
-                response = self.create_repository_workflow(repo_info)
-            else:
-                response = "❌ Creación cancelada. Puedes intentar de nuevo con otra descripción."
-        else:
-            # Respuesta conversacional general
-            response = self._general_response(user_input)
-
-        # Añadir respuesta al historial
-        self.conversation_history.append({"role": "assistant", "content": response})
-
-        return response
-
-    def _general_response(self, user_input):
-        """Respuesta conversacional general"""
-
-        help_keywords = ["ayuda", "help", "como", "qué puedes hacer"]
-
-        if any(keyword in user_input.lower() for keyword in help_keywords):
-            return """🤖 ¡Hola! Soy tu asistente para crear repositorios de GitHub.
-
-Puedo ayudarte a:
-✅ Crear repositorios públicos o privados
-✅ Generar README.md automáticamente
-✅ Subir el README a tu repositorio
-
-Solo dime algo como:
-• "Crea un repositorio público llamado 'mi-web-app' para una aplicación web de tareas"
-• "Necesito un repo privado 'proyecto-secreto' que es un sistema de gestión"
-• "Haz un repositorio 'mi-blog' para un blog personal con React"
-
-¿Qué repositorio quieres crear hoy?"""
-
-        return """No estoy seguro de qué quieres hacer. 
-
-Puedo ayudarte a crear repositorios de GitHub. Solo dime:
-- Nombre del repositorio
-- Si debe ser privado o público  
-- De qué se trata el proyecto
-
-¿Quieres crear un repositorio?"""
+            logger.error(f"Error en flujo completo: {e}")
+            return {"success": False, "message": f"Error: {str(e)}"}
 
 
 def main():
-    """Función principal para interactuar con el usuario"""
-
-    print("🤖 GitHub Repository Creator Agent")
-    print("=" * 50)
+    print("🤖 ¡Hola! Soy Herbie, tu asistente inteligente para crear repositorios de GitHub.")
+    print("Puedo ayudarte a crear proyectos con diferentes frameworks y subirlos automáticamente.")
+    print("Frameworks soportados:", ", ".join(FrameworkDatabase.FRAMEWORKS.keys()))
 
     try:
-        # Inicializar el agente
-        agent = GitHubAgent()
+        print("\n¿Qué proyecto vamos a crear hoy?")
+        user_input = input("📝 Describe tu proyecto: ")
 
-        print("\n¡Hola! Soy tu asistente para crear repositorios de GitHub.")
-        print("Puedo ayudarte a crear repositorios con README.md generado automáticamente.")
-        print("\nEscribe 'ayuda' para ver ejemplos de uso.")
+        if not user_input.strip():
+            print("❌ Por favor, describe el proyecto que quieres crear.")
+            return
 
-        while True:
-            user_input = input("\n📝 Tú: ").strip()
+        agent = GitHubRepoCreator()
+        result = agent.create_full_flow(user_input)
 
-            if user_input.lower() in ['salir', 'exit', 'quit']:
-                print("👋 ¡Hasta luego!")
-                break
-
-            if not user_input:
-                print("Por favor, dime qué quieres hacer.")
-                continue
-
-            print()
-            response = agent.chat(user_input)
-            print(f"🤖 Asistente: {response}")
+        if result["success"]:
+            print(f"\n✨ ¡Proyecto creado exitosamente!")
+            print(f"🔗 URL: {result['repo_url']}")
+        else:
+            print(f"\n❌ {result['message']}")
 
     except KeyboardInterrupt:
         print("\n\n👋 ¡Hasta luego!")
     except Exception as e:
-        print(f"\n❌ Error inicializando el agente: {e}")
-        print("\nAsegúrate de tener las variables de entorno configuradas:")
-        print("- GITHUB_TOKEN: Token de GitHub con permisos de repositorio")
-        print("- GOOGLE_API_KEY: API key de Google Generative AI")
+        print(f"\n❌ Error inesperado: {e}")
+        logger.error(f"Error en main: {e}")
 
 
 if __name__ == "__main__":
