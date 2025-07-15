@@ -38,6 +38,15 @@ class ProjectInfo:
     additional_setup: Optional[List[str]] = None
 
 
+@dataclass
+class ParsedInput:
+    repo_name: Optional[str] = None
+    description: Optional[str] = None
+    is_private: Optional[bool] = None
+    framework: Optional[str] = None
+    missing_fields: List[str] = None
+
+
 class FrameworkDatabase:
     """Base de conocimiento de frameworks con comandos y configuraciones"""
 
@@ -127,6 +136,10 @@ class FrameworkDatabase:
     @classmethod
     def get_framework_info(cls, framework: str) -> Optional[Dict]:
         return cls.FRAMEWORKS.get(framework.lower())
+
+    @classmethod
+    def get_framework_names(cls) -> List[str]:
+        return list(cls.FRAMEWORKS.keys())
 
 
 class HerbieFrameworkHelper:
@@ -292,9 +305,9 @@ class GitHubRepoCreator:
             logger.error(f"Error conectando con GitHub: {e}")
             return 'unknown-user'
 
-    def parse_user_input(self, user_input: str) -> ProjectInfo:
-        """Parsea entrada del usuario usando IA"""
-        frameworks_list = list(FrameworkDatabase.FRAMEWORKS.keys())
+    def parse_user_input(self, user_input: str) -> ParsedInput:
+        """Parsea entrada del usuario usando IA y detecta campos faltantes"""
+        frameworks_list = FrameworkDatabase.get_framework_names()
 
         prompt = f"""
 Analiza este mensaje del usuario y extrae información para crear un proyecto:
@@ -304,20 +317,20 @@ Frameworks disponibles: {frameworks_list}
 
 Responde SOLO con un JSON válido con esta estructura exacta:
 {{
-  "repo_name": "nombre-del-repositorio",
-  "is_private": true/false,
-  "description": "descripción del proyecto",
-  "framework": "framework-elegido",
-  "init_command": "comando-para-inicializar",
-  "additional_setup": ["comando1", "comando2"] o null
+  "repo_name": "nombre-del-repositorio o null si no está especificado",
+  "is_private": true/false/null (null si no está especificado),
+  "description": "descripción del proyecto o null si no está especificada",
+  "framework": "framework-elegido o null si no está especificado"
 }}
 
-Reglas:
-- repo_name: sin espacios, guiones bajos o caracteres especiales
-- framework: debe ser uno de la lista disponible
-- init_command: comando completo con argumentos
-- Si no se especifica privacidad, usa false
-- Si falta información, usa valores razonables
+Reglas importantes:
+- Si algún campo NO está claramente especificado en el mensaje, devuelve null para ese campo
+- repo_name: sin espacios, usar guiones. Solo si está claro en el mensaje
+- framework: debe ser exactamente uno de la lista disponible, o null si no está claro
+- is_private: solo true/false si está explícitamente mencionado, sino null
+- description: solo si hay una descripción clara del proyecto, sino null
+
+Sé estricto: si no está claro, usa null.
 """
 
         try:
@@ -334,13 +347,23 @@ Reglas:
             json_str = content[start:end]
             data = json.loads(json_str)
 
-            return ProjectInfo(
-                repo_name=data['repo_name'],
-                description=data['description'],
-                is_private=data['is_private'],
-                framework=data['framework'],
-                init_command=data['init_command'],
-                additional_setup=data.get('additional_setup')
+            # Identificar campos faltantes
+            missing_fields = []
+            if not data.get('repo_name'):
+                missing_fields.append('repo_name')
+            if data.get('framework') is None:
+                missing_fields.append('framework')
+            if data.get('is_private') is None:
+                missing_fields.append('is_private')
+            if not data.get('description'):
+                missing_fields.append('description')
+
+            return ParsedInput(
+                repo_name=data.get('repo_name'),
+                description=data.get('description'),
+                is_private=data.get('is_private'),
+                framework=data.get('framework'),
+                missing_fields=missing_fields
             )
 
         except json.JSONDecodeError as e:
@@ -349,6 +372,92 @@ Reglas:
         except Exception as e:
             logger.error(f"Error procesando entrada: {e}")
             raise ValueError("Error procesando la entrada del usuario")
+
+    def ask_for_missing_info(self, parsed_input: ParsedInput) -> ParsedInput:
+        """Pregunta al usuario por la información faltante"""
+
+        # Preguntar por nombre del repositorio
+        if 'repo_name' in parsed_input.missing_fields:
+            while True:
+                repo_name = input("📁 ¿Cuál será el nombre del repositorio? (sin espacios, usar guiones): ").strip()
+                if repo_name:
+                    # Limpiar el nombre del repositorio
+                    repo_name = repo_name.lower().replace(' ', '-').replace('_', '-')
+                    parsed_input.repo_name = repo_name
+                    break
+                else:
+                    print("❌ El nombre del repositorio es obligatorio.")
+
+        # Preguntar por framework
+        if 'framework' in parsed_input.missing_fields:
+            frameworks = FrameworkDatabase.get_framework_names()
+            print(f"\n🛠️ Frameworks disponibles: {', '.join(frameworks)}")
+
+            while True:
+                framework = input("¿Qué framework quieres usar? ").strip().lower()
+                if framework in frameworks:
+                    parsed_input.framework = framework
+                    break
+                else:
+                    print(f"❌ Framework no válido. Opciones disponibles: {', '.join(frameworks)}")
+
+        # Preguntar por privacidad
+        if 'is_private' in parsed_input.missing_fields:
+            while True:
+                privacy = input("🔒 ¿El repositorio será privado? (s/n): ").strip().lower()
+                if privacy in ['s', 'si', 'sí', 'y', 'yes']:
+                    parsed_input.is_private = True
+                    break
+                elif privacy in ['n', 'no']:
+                    parsed_input.is_private = False
+                    break
+                else:
+                    print("❌ Responde 's' para sí o 'n' para no.")
+
+        # Preguntar por descripción
+        if 'description' in parsed_input.missing_fields:
+            description = input("📝 Descripción del proyecto (opcional, presiona Enter para omitir): ").strip()
+            if description:
+                parsed_input.description = description
+            else:
+                parsed_input.description = f"Proyecto {parsed_input.framework} creado con Herbie"
+
+        return parsed_input
+
+    def create_project_info(self, parsed_input: ParsedInput) -> ProjectInfo:
+        """Convierte ParsedInput a ProjectInfo con comandos de inicialización"""
+
+        # Generar comando de inicialización basado en el framework
+        framework_info = FrameworkDatabase.get_framework_info(parsed_input.framework)
+
+        if parsed_input.framework == "react":
+            init_command = f"npx create-react-app {parsed_input.repo_name}"
+        elif parsed_input.framework == "vue":
+            init_command = f"npm create vue@latest {parsed_input.repo_name}"
+        elif parsed_input.framework == "angular":
+            init_command = f"ng new {parsed_input.repo_name} --routing --style=css"
+        elif parsed_input.framework == "nextjs":
+            init_command = f"npx create-next-app@latest {parsed_input.repo_name}"
+        elif parsed_input.framework == "django":
+            init_command = f"django-admin startproject {parsed_input.repo_name}"
+        elif parsed_input.framework == "fastapi":
+            init_command = f"mkdir {parsed_input.repo_name}"
+            # Para FastAPI, necesitamos crear la estructura manualmente
+        elif parsed_input.framework == "rails":
+            init_command = f"rails new {parsed_input.repo_name}"
+        elif parsed_input.framework == "flutter":
+            init_command = f"flutter create {parsed_input.repo_name}"
+        else:
+            init_command = f"mkdir {parsed_input.repo_name}"
+
+        return ProjectInfo(
+            repo_name=parsed_input.repo_name,
+            description=parsed_input.description,
+            is_private=parsed_input.is_private,
+            framework=parsed_input.framework,
+            init_command=init_command,
+            additional_setup=None
+        )
 
     def create_repository(self, project_info: ProjectInfo) -> Optional[Dict]:
         """Crea repositorio en GitHub"""
@@ -500,9 +609,40 @@ Reglas:
             return False
 
     def create_full_flow(self, user_input: str) -> Dict:
-        """Flujo completo de creación de repositorio"""
+        """Flujo completo de creación de repositorio con preguntas interactivas"""
         try:
-            project_info = self.parse_user_input(user_input)
+            # Parsear input inicial
+            parsed_input = self.parse_user_input(user_input)
+
+            # Si hay campos faltantes, preguntar por ellos
+            if parsed_input.missing_fields:
+                print(f"🔍 Información extraída de tu mensaje:")
+                if parsed_input.repo_name:
+                    print(f"   ✅ Nombre: {parsed_input.repo_name}")
+                if parsed_input.framework:
+                    print(f"   ✅ Framework: {parsed_input.framework}")
+                if parsed_input.is_private is not None:
+                    print(f"   ✅ Privacidad: {'Privado' if parsed_input.is_private else 'Público'}")
+                if parsed_input.description:
+                    print(f"   ✅ Descripción: {parsed_input.description}")
+
+                print(f"\n❓ Necesito más información para continuar...")
+                parsed_input = self.ask_for_missing_info(parsed_input)
+
+            # Crear ProjectInfo
+            project_info = self.create_project_info(parsed_input)
+
+            # Mostrar resumen final
+            print(f"\n📋 Resumen del proyecto:")
+            print(f"   📁 Nombre: {project_info.repo_name}")
+            print(f"   🛠️  Framework: {project_info.framework}")
+            print(f"   🔒 Privacidad: {'Privado' if project_info.is_private else 'Público'}")
+            print(f"   📝 Descripción: {project_info.description}")
+
+            # Confirmar creación
+            confirm = input("\n¿Proceder con la creación del repositorio? (s/n): ").strip().lower()
+            if confirm not in ['s', 'si', 'sí', 'y', 'yes']:
+                return {"success": False, "message": "❌ Creación cancelada por el usuario."}
 
             # Inicializar proyecto local
             framework_result = self.framework_helper.init_framework_project(project_info)
@@ -566,28 +706,11 @@ class HerbieAgent:
         try:
             print("🔍 Analizando tu solicitud...")
 
-            # Parsear información del proyecto
-            project_info = self.repo_creator.parse_user_input(user_input)
-
-            # Mostrar información extraída
-            print(f"📋 Información del proyecto:")
-            print(f"   - Nombre: {project_info.repo_name}")
-            print(f"   - Framework: {project_info.framework}")
-            print(f"   - Tipo: {'Privado' if project_info.is_private else 'Público'}")
-            print(f"   - Descripción: {project_info.description[:100]}...")
-
-            # Confirmar con el usuario
-            confirm = input("\n¿Confirmas la creación del repositorio? (s/n): ").lower().strip()
-
-            if confirm not in ['s', 'si', 'y', 'yes']:
-                return "❌ Creación cancelada. Puedes intentar de nuevo con otra descripción."
-
-            print("\n⚙️ Iniciando creación del proyecto...")
-
-            # Crear el repositorio
+            # Crear el repositorio (ahora con preguntas interactivas)
             result = self.repo_creator.create_full_flow(user_input)
 
             if result['success']:
+                project_info = result['project_info']
                 privacy_text = "privado" if project_info.is_private else "público"
                 response = f"""✅ ¡Repositorio creado exitosamente!
 
@@ -602,7 +725,7 @@ class HerbieAgent:
                 return response
             else:
                 if 'install_md' in result:
-                    install_file = f"{project_info.repo_name}_INSTALL.md"
+                    install_file = f"INSTALL.md"
                     with open(install_file, "w", encoding="utf-8") as f:
                         f.write(result['install_md'])
                     response = f"""❌ No se pudo crear el proyecto completo.
@@ -628,21 +751,24 @@ Revisa las instrucciones para configurar el framework correctamente."""
         help_keywords = ["ayuda", "help", "como", "qué puedes hacer", "comandos"]
 
         if any(keyword in user_input.lower() for keyword in help_keywords):
-            response = """🤖 ¡Hola! Soy Herbie, tu asistente inteligente para crear repositorios de GitHub.
+            frameworks = FrameworkDatabase.get_framework_names()
+            response = f"""🤖 ¡Hola! Soy Herbie, tu asistente inteligente para crear repositorios de GitHub.
 
 Puedo ayudarte a:
 ✅ Crear repositorios públicos o privados
 ✅ Inicializar proyectos con diferentes frameworks
 ✅ Configurar el código inicial automáticamente
 ✅ Subir todo a GitHub listo para usar
+✅ Te pregunto por cualquier información faltante
 
 🛠️ Frameworks soportados:
-React, Vue, Angular, Next.js, Django, FastAPI, Rails, Flutter
+{', '.join(frameworks)}
 
 💬 Ejemplos de uso:
-• "Crea un repositorio público llamado 'mi-blog' con React"
-• "Necesito un proyecto privado 'tienda-online' usando Next.js"
-• "Haz un repo 'mi-api' con FastAPI para una REST API"
+• "Crea un repositorio público con React"
+• "Necesito un proyecto privado con Next.js"
+• "Haz un repo con FastAPI"
+• "Nuevo proyecto" (te preguntaré los detalles)
 
 ¿Qué proyecto quieres crear hoy?"""
         else:
@@ -650,10 +776,13 @@ React, Vue, Angular, Next.js, Django, FastAPI, Rails, Flutter
 
 Soy Herbie, tu asistente para crear repositorios de GitHub con frameworks populares.
 
-Puedo ayudarte a crear un proyecto completo desde cero. Solo dime:
-- Qué tipo de proyecto quieres crear
-- Qué framework prefieres usar
-- Si quieres que sea público o privado
+Puedo ayudarte a crear un proyecto completo desde cero. Solo dime qué quieres hacer y te preguntaré por cualquier información que falte:
+- Nombre del proyecto
+- Framework a usar
+- Si será público o privado
+- Descripción del proyecto
+
+No te preocupes si no tienes todos los detalles, ¡te ayudo a completarlos!
 
 Escribe 'ayuda' para ver ejemplos de uso.
 
@@ -675,7 +804,7 @@ def main():
 
         print("\n¡Hola! Soy Herbie, tu asistente para crear repositorios de GitHub.")
         print("Puedo ayudarte a crear proyectos completos con diferentes frameworks.")
-        print("Todo se configura automáticamente y se sube a GitHub listo para usar.")
+        print("Si falta alguna información, te preguntaré por ella.")
         print("\nEscribe 'ayuda' para ver qué puedo hacer o 'salir' para terminar.")
 
         while True:
