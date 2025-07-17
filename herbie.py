@@ -389,12 +389,23 @@ Contexto de la situación:
 Frameworks disponibles:
 {self.system_context['frameworks']}
 
+Intenciones especiales a manejar:
+- ask_local_initialization: Preguntar si quiere inicializar el framework localmente
+- project_creation_success_with_local: Éxito creando repo + código local
+- project_creation_partial_success_with_local: Repo creado, código local listo, problemas subiendo
+- project_creation_success_repo_only: Solo repositorio creado, sin código local
+- framework_setup_failed: Error configurando framework (incluir repo_url si existe)
+
 Genera una respuesta que sea:
 1. Acorde a tu personalidad (amigable, inteligente, expresiva)
 2. Contextualmente apropiada
 3. Útil y accionable
 4. Con emojis y formato atractivo
 5. Que mantenga el flujo conversacional
+
+Para "ask_local_initialization": pregunta si quiere inicializar el framework localmente después de crear el repo
+Para intenciones de éxito: incluye información relevante como URLs, paths locales, próximos pasos
+Para errores: sé empático pero positivo, ofrece soluciones
 
 Responde directamente con el texto de la respuesta, NO con JSON.
 Usa markdown para formato cuando sea apropiado.
@@ -621,27 +632,51 @@ class GitHubRepoCreator:
             return 'unknown-user'
 
     def create_project_info(self, parsed_input: ParsedInput) -> ProjectInfo:
-        """Convierte ParsedInput a ProjectInfo con comandos de inicialización"""
+        """Convierte ParsedInput a ProjectInfo con comandos de inicialización usando IA"""
 
-        # Generar comando de inicialización basado en el framework
-        if parsed_input.framework == "react":
-            init_command = f"npx create-react-app {parsed_input.repo_name}"
-        elif parsed_input.framework == "vue":
-            init_command = f"npm create vue@latest {parsed_input.repo_name}"
-        elif parsed_input.framework == "angular":
-            init_command = f"ng new {parsed_input.repo_name} --routing --style=css"
-        elif parsed_input.framework == "nextjs":
-            init_command = f"npx create-next-app@latest {parsed_input.repo_name}"
-        elif parsed_input.framework == "django":
-            init_command = f"django-admin startproject {parsed_input.repo_name}"
-        elif parsed_input.framework == "fastapi":
-            init_command = f"mkdir {parsed_input.repo_name}"
-        elif parsed_input.framework == "rails":
-            init_command = f"rails new {parsed_input.repo_name}"
-        elif parsed_input.framework == "flutter":
-            init_command = f"flutter create {parsed_input.repo_name}"
-        else:
-            init_command = f"mkdir {parsed_input.repo_name}"
+        # Usar IA para generar el comando de inicialización más apropiado
+        prompt = f"""
+Eres un experto en frameworks de desarrollo.
+
+Datos del proyecto:
+- Nombre: {parsed_input.repo_name}
+- Framework: {parsed_input.framework}
+- Descripción: {parsed_input.description}
+
+Framework disponible: {FrameworkDatabase.get_framework_info(parsed_input.framework)}
+
+Genera el comando de inicialización más apropiado para este framework.
+
+Responde con JSON:
+{{
+  "init_command": "comando-completo-de-inicializacion",
+  "additional_setup": ["comando1", "comando2"] o null,
+  "reasoning": "explicación de por qué elegiste este comando"
+}}
+
+Considera:
+- Usar las mejores prácticas para cada framework
+- Incluir configuraciones recomendadas
+- Comandos adicionales si son necesarios (instalación de dependencias, etc.)
+"""
+
+        try:
+            response = self.repo_creator.llm.invoke([HumanMessage(content=prompt)])
+            content = response.content.strip()
+
+            start = content.find('{')
+            end = content.rfind('}') + 1
+            json_str = content[start:end]
+            data = json.loads(json_str)
+
+            init_command = data.get('init_command',
+                                    self._get_default_init_command(parsed_input.framework, parsed_input.repo_name))
+            additional_setup = data.get('additional_setup')
+
+        except Exception as e:
+            logger.error(f"Error generando comando de inicialización: {e}")
+            init_command = self._get_default_init_command(parsed_input.framework, parsed_input.repo_name)
+            additional_setup = None
 
         return ProjectInfo(
             repo_name=parsed_input.repo_name,
@@ -649,8 +684,29 @@ class GitHubRepoCreator:
             is_private=parsed_input.is_private,
             framework=parsed_input.framework,
             init_command=init_command,
-            additional_setup=None
+            additional_setup=additional_setup
         )
+
+    def _get_default_init_command(self, framework: str, repo_name: str) -> str:
+        """Comando de inicialización por defecto como fallback"""
+        if framework == "react":
+            return f"npx create-react-app {repo_name}"
+        elif framework == "vue":
+            return f"npm create vue@latest {repo_name}"
+        elif framework == "angular":
+            return f"ng new {repo_name} --routing --style=css"
+        elif framework == "nextjs":
+            return f"npx create-next-app@latest {repo_name}"
+        elif framework == "django":
+            return f"django-admin startproject {repo_name}"
+        elif framework == "fastapi":
+            return f"mkdir {repo_name}"
+        elif framework == "rails":
+            return f"rails new {repo_name}"
+        elif framework == "flutter":
+            return f"flutter create {repo_name}"
+        else:
+            return f"mkdir {repo_name}"
 
     def create_repository(self, project_info: ProjectInfo) -> Optional[Dict]:
         """Crea repositorio en GitHub"""
@@ -987,30 +1043,8 @@ class HerbieAgent:
 
             project_info = self.repo_creator.create_project_info(parsed_input)
 
-            # Inicializar proyecto local
-            framework_result = self.repo_creator.framework_helper.init_framework_project(project_info)
-
-            if not framework_result['success']:
-                self.pending_project = None
-                error_response = self.ai_core.generate_response(
-                    intent="framework_setup_failed",
-                    context={
-                        "error_message": framework_result['message'],
-                        "project": project_info.__dict__
-                    },
-                    user_input="error de framework"
-                )
-
-                # Generar archivo de instalación si está disponible
-                if 'install_md' in framework_result:
-                    install_file = f"INSTALL_{project_info.repo_name}.md"
-                    with open(install_file, "w", encoding="utf-8") as f:
-                        f.write(framework_result['install_md'])
-                    error_response += f"\n\n📄 He creado un archivo de instalación: {install_file}"
-
-                return error_response
-
-            # Crear repositorio
+            # Crear repositorio primero
+            print("☁️ Creando repositorio en GitHub...")
             repo = self.repo_creator.create_repository(project_info)
             if not repo:
                 self.pending_project = None
@@ -1020,37 +1054,96 @@ class HerbieAgent:
                     user_input="error creando repositorio"
                 )
 
-            # Subir código
-            upload_success = self.repo_creator.push_local_to_repo(project_info.repo_name)
-            if not upload_success:
-                upload_success = self.repo_creator.push_local_to_repo_alternative(project_info.repo_name)
+            # Preguntar si quiere inicializar el framework localmente
+            local_init_question = self.ai_core.generate_response(
+                intent="ask_local_initialization",
+                context={
+                    "project": project_info.__dict__,
+                    "repo_url": repo['html_url']
+                },
+                user_input="preguntar inicialización local"
+            )
 
-            # Generar mensaje de éxito/error usando IA
-            if upload_success:
-                success_response = self.ai_core.generate_response(
-                    intent="project_creation_success",
+            print(f"\n🤖 Herbie: {local_init_question}")
+
+            # Obtener respuesta del usuario
+            user_response = input("\n💬 Tú: ").strip()
+
+            # Analizar respuesta con IA
+            local_init_analysis = self.ai_core.analyze_user_intent(user_response, self.conversation_history)
+
+            final_response = ""
+
+            if local_init_analysis.action in ["confirmar_proyecto",
+                                              "crear_proyecto"] and local_init_analysis.confidence > 0.6:
+                # Usuario quiere inicializar localmente
+                print("🔧 Inicializando proyecto localmente...")
+                framework_result = self.repo_creator.framework_helper.init_framework_project(project_info)
+
+                if not framework_result['success']:
+                    error_response = self.ai_core.generate_response(
+                        intent="framework_setup_failed",
+                        context={
+                            "error_message": framework_result['message'],
+                            "project": project_info.__dict__,
+                            "repo_url": repo['html_url']
+                        },
+                        user_input="error de framework"
+                    )
+
+                    # Generar archivo de instalación si está disponible
+                    if 'install_md' in framework_result:
+                        install_file = f"INSTALL_{project_info.repo_name}.md"
+                        with open(install_file, "w", encoding="utf-8") as f:
+                            f.write(framework_result['install_md'])
+                        error_response += f"\n\n📄 He creado un archivo de instalación: {install_file}"
+
+                    final_response = error_response
+                else:
+                    # Subir código al repositorio
+                    print("📤 Subiendo código al repositorio...")
+                    upload_success = self.repo_creator.push_local_to_repo(project_info.repo_name)
+                    if not upload_success:
+                        upload_success = self.repo_creator.push_local_to_repo_alternative(project_info.repo_name)
+
+                    if upload_success:
+                        final_response = self.ai_core.generate_response(
+                            intent="project_creation_success_with_local",
+                            context={
+                                "project": project_info.__dict__,
+                                "repo_url": repo['html_url'],
+                                "clone_url": repo['clone_url'],
+                                "local_path": os.path.abspath(project_info.repo_name)
+                            },
+                            user_input="proyecto creado exitosamente con código local"
+                        )
+                    else:
+                        final_response = self.ai_core.generate_response(
+                            intent="project_creation_partial_success_with_local",
+                            context={
+                                "project": project_info.__dict__,
+                                "repo_url": repo['html_url'],
+                                "local_path": os.path.abspath(project_info.repo_name)
+                            },
+                            user_input="proyecto creado con problemas de subida pero código local listo"
+                        )
+            else:
+                # Usuario no quiere inicializar localmente
+                final_response = self.ai_core.generate_response(
+                    intent="project_creation_success_repo_only",
                     context={
                         "project": project_info.__dict__,
                         "repo_url": repo['html_url'],
                         "clone_url": repo['clone_url']
                     },
-                    user_input="proyecto creado exitosamente"
-                )
-            else:
-                success_response = self.ai_core.generate_response(
-                    intent="project_creation_partial_success",
-                    context={
-                        "project": project_info.__dict__,
-                        "repo_url": repo['html_url']
-                    },
-                    user_input="proyecto creado con problemas de subida"
+                    user_input="repositorio creado sin código local"
                 )
 
             # Limpiar proyecto pendiente
             self.pending_project = None
 
-            self.conversation_history.append({"role": "assistant", "content": success_response})
-            return success_response
+            self.conversation_history.append({"role": "assistant", "content": final_response})
+            return final_response
 
         except Exception as e:
             logger.error(f"Error ejecutando creación: {e}")
