@@ -45,6 +45,16 @@ class ParsedInput:
     is_private: Optional[bool] = None
     framework: Optional[str] = None
     missing_fields: List[str] = None
+    confidence: float = 0.0
+    assumptions: List[str] = None
+
+
+@dataclass
+class AIDecision:
+    action: str
+    confidence: float
+    reasoning: str
+    data: Dict = None
 
 
 class FrameworkDatabase:
@@ -59,7 +69,8 @@ class FrameworkDatabase:
                 "windows": "Instala Node.js desde https://nodejs.org/",
                 "linux": "sudo apt-get install nodejs npm",
                 "darwin": "brew install node"
-            }
+            },
+            "description": "Framework JavaScript para crear interfaces de usuario interactivas"
         },
         "vue": {
             "commands": ["npm create vue@latest", "vue create"],
@@ -69,7 +80,8 @@ class FrameworkDatabase:
                 "windows": "Instala Node.js desde https://nodejs.org/",
                 "linux": "sudo apt-get install nodejs npm",
                 "darwin": "brew install node"
-            }
+            },
+            "description": "Framework JavaScript progresivo para crear aplicaciones web"
         },
         "angular": {
             "commands": ["ng new"],
@@ -79,7 +91,8 @@ class FrameworkDatabase:
                 "windows": "npm install -g @angular/cli",
                 "linux": "sudo npm install -g @angular/cli",
                 "darwin": "npm install -g @angular/cli"
-            }
+            },
+            "description": "Framework TypeScript para crear aplicaciones web robustas"
         },
         "rails": {
             "commands": ["rails new"],
@@ -89,7 +102,8 @@ class FrameworkDatabase:
                 "windows": "Instala Ruby desde https://rubyinstaller.org/",
                 "linux": "sudo apt-get install ruby-full",
                 "darwin": "brew install ruby"
-            }
+            },
+            "description": "Framework Ruby para desarrollo web rápido y elegante"
         },
         "django": {
             "commands": ["django-admin startproject"],
@@ -99,7 +113,8 @@ class FrameworkDatabase:
                 "windows": "pip install django",
                 "linux": "pip install django",
                 "darwin": "pip install django"
-            }
+            },
+            "description": "Framework Python para desarrollo web con baterías incluidas"
         },
         "fastapi": {
             "commands": ["fastapi-cli new"],
@@ -109,7 +124,8 @@ class FrameworkDatabase:
                 "windows": "pip install fastapi-cli",
                 "linux": "pip install fastapi-cli",
                 "darwin": "pip install fastapi-cli"
-            }
+            },
+            "description": "Framework Python moderno para crear APIs rápidas y robustas"
         },
         "nextjs": {
             "commands": ["npx create-next-app@latest"],
@@ -119,7 +135,8 @@ class FrameworkDatabase:
                 "windows": "Instala Node.js desde https://nodejs.org/",
                 "linux": "sudo apt-get install nodejs npm",
                 "darwin": "brew install node"
-            }
+            },
+            "description": "Framework React para aplicaciones web con SSR y generación estática"
         },
         "flutter": {
             "commands": ["flutter create"],
@@ -129,7 +146,8 @@ class FrameworkDatabase:
                 "windows": "Descarga Flutter SDK desde https://flutter.dev/docs/get-started/install/windows",
                 "linux": "sudo snap install flutter --classic",
                 "darwin": "brew install flutter"
-            }
+            },
+            "description": "Framework de Google para crear aplicaciones móviles multiplataforma"
         }
     }
 
@@ -140,6 +158,284 @@ class FrameworkDatabase:
     @classmethod
     def get_framework_names(cls) -> List[str]:
         return list(cls.FRAMEWORKS.keys())
+
+    @classmethod
+    def get_framework_description(cls, framework: str) -> str:
+        info = cls.get_framework_info(framework)
+        return info.get('description', 'Framework para desarrollo') if info else 'Framework desconocido'
+
+    @classmethod
+    def get_all_frameworks_info(cls) -> str:
+        """Retorna información completa de todos los frameworks para la IA"""
+        info = []
+        for name, data in cls.FRAMEWORKS.items():
+            info.append(f"- {name}: {data['description']}")
+        return "\n".join(info)
+
+
+class AIIntelligenceCore:
+    """Núcleo de inteligencia artificial para todas las decisiones del agente"""
+
+    def __init__(self, llm):
+        self.llm = llm
+        self.system_context = {
+            "frameworks": FrameworkDatabase.get_all_frameworks_info(),
+            "framework_names": FrameworkDatabase.get_framework_names(),
+            "os": platform.system().lower(),
+            "agent_name": "Herbie",
+            "agent_personality": "friendly, intelligent, helpful, expressive, creative"
+        }
+
+    def analyze_user_intent(self, user_input: str, conversation_history: List[Dict] = None) -> AIDecision:
+        """Analizar la intención del usuario usando IA"""
+
+        history_context = ""
+        if conversation_history:
+            recent_history = conversation_history[-3:]  # Últimos 3 mensajes
+            history_context = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_history])
+
+        prompt = f"""
+Eres {self.system_context['agent_name']}, un agente inteligente especializado en crear repositorios de GitHub.
+
+Historial de conversación reciente:
+{history_context}
+
+Mensaje actual del usuario: "{user_input}"
+
+Contexto disponible:
+- Frameworks disponibles: {self.system_context['framework_names']}
+- Personalidad del agente: {self.system_context['agent_personality']}
+
+Analiza la intención del usuario y responde con JSON:
+{{
+  "intent": "crear_proyecto|confirmar_proyecto|modificar_proyecto|cancelar_proyecto|conversacion_general|ayuda|saludo|agradecimiento|despedida|unclear",
+  "confidence": 0.0-1.0,
+  "reasoning": "explicación detallada de por qué clasificaste así la intención",
+  "context_clues": ["lista", "de", "pistas", "contextuales", "que", "usaste"],
+  "emotional_tone": "neutral|excited|confused|frustrated|happy|etc",
+  "needs_clarification": true/false
+}}
+
+Sé muy inteligente para detectar intenciones sutiles, contexto emocional, y matices del lenguaje.
+"""
+
+        try:
+            response = self.llm.invoke([HumanMessage(content=prompt)])
+            content = response.content.strip()
+
+            start = content.find('{')
+            end = content.rfind('}') + 1
+            json_str = content[start:end]
+            data = json.loads(json_str)
+
+            return AIDecision(
+                action=data.get('intent', 'unclear'),
+                confidence=data.get('confidence', 0.0),
+                reasoning=data.get('reasoning', ''),
+                data=data
+            )
+
+        except Exception as e:
+            logger.error(f"Error en análisis de intención: {e}")
+            return AIDecision(
+                action='unclear',
+                confidence=0.0,
+                reasoning=f"Error procesando: {str(e)}",
+                data={}
+            )
+
+    def parse_project_requirements(self, user_input: str) -> ParsedInput:
+        """Parsear y inferir requerimientos del proyecto usando IA"""
+
+        prompt = f"""
+Eres un experto en análisis de requerimientos de proyectos de software.
+
+Mensaje del usuario: "{user_input}"
+
+Frameworks disponibles:
+{self.system_context['frameworks']}
+
+Tu tarea es extraer e inferir información inteligentemente:
+
+1. Si mencionan conceptos vagos, haz inferencias inteligentes:
+   - "web app", "sitio", "página" → React
+   - "API", "backend", "microservicio" → FastAPI
+   - "app móvil", "mobile" → Flutter
+   - "e-commerce", "tienda" → Next.js
+
+2. Si no especifican privacidad, asume público por defecto
+
+3. Genera nombres creativos pero descriptivos si no se especifica
+
+4. Crea descripciones atractivas basadas en el contexto
+
+Responde con JSON:
+{{
+  "repo_name": "nombre-generado-o-extraido",
+  "description": "descripción-atractiva-generada",
+  "is_private": true/false,
+  "framework": "framework-elegido",
+  "confidence": 0.0-1.0,
+  "assumptions": ["lista", "de", "suposiciones", "hechas"],
+  "missing_critical_info": ["lista", "de", "info", "crítica", "faltante"],
+  "inferred_project_type": "web|mobile|api|desktop|etc",
+  "creativity_level": 0.0-1.0
+}}
+
+Sé creativo, inteligente y haz suposiciones razonables.
+"""
+
+        try:
+            response = self.llm.invoke([HumanMessage(content=prompt)])
+            content = response.content.strip()
+
+            start = content.find('{')
+            end = content.rfind('}') + 1
+            json_str = content[start:end]
+            data = json.loads(json_str)
+
+            return ParsedInput(
+                repo_name=data.get('repo_name'),
+                description=data.get('description'),
+                is_private=data.get('is_private', False),
+                framework=data.get('framework'),
+                confidence=data.get('confidence', 0.0),
+                assumptions=data.get('assumptions', []),
+                missing_fields=data.get('missing_critical_info', [])
+            )
+
+        except Exception as e:
+            logger.error(f"Error parseando requerimientos: {e}")
+            return ParsedInput(
+                repo_name="mi-proyecto-increible",
+                description="Un proyecto increíble creado con Herbie",
+                is_private=False,
+                framework="react",
+                confidence=0.3,
+                assumptions=["Fallback por error en IA"],
+                missing_fields=["confirmation"]
+            )
+
+    def analyze_project_confirmation(self, user_input: str, project_data: Dict) -> AIDecision:
+        """Analizar respuesta de confirmación del proyecto"""
+
+        prompt = f"""
+El usuario tiene un proyecto pendiente:
+- Nombre: {project_data.get('repo_name')}
+- Framework: {project_data.get('framework')}
+- Privacidad: {'Privado' if project_data.get('is_private') else 'Público'}
+- Descripción: {project_data.get('description')}
+
+Respuesta del usuario: "{user_input}"
+
+Analiza qué quiere hacer. Responde con JSON:
+{{
+  "action": "confirm|modify|cancel|need_clarification",
+  "confidence": 0.0-1.0,
+  "reasoning": "explicación detallada de la interpretación",
+  "emotional_response": "como debería responder emocionalmente",
+  "specific_field_to_modify": "repo_name|framework|is_private|description|null",
+  "new_value": "valor-nuevo-si-aplica",
+  "user_sentiment": "positive|negative|neutral|confused"
+}}
+
+Considera:
+- Confirmaciones pueden ser creativas: emojis, diferentes idiomas, expresiones únicas
+- Modificaciones pueden ser sutiles: "mejor que sea privado", "cambia a Vue"
+- Cancelaciones pueden ser indirectas: "no me gusta", "mejor no"
+- Detecta frustración o confusión para responder apropiadamente
+
+Sé muy inteligente para detectar matices y contexto emocional.
+"""
+
+        try:
+            response = self.llm.invoke([HumanMessage(content=prompt)])
+            content = response.content.strip()
+
+            start = content.find('{')
+            end = content.rfind('}') + 1
+            json_str = content[start:end]
+            data = json.loads(json_str)
+
+            return AIDecision(
+                action=data.get('action', 'need_clarification'),
+                confidence=data.get('confidence', 0.0),
+                reasoning=data.get('reasoning', ''),
+                data=data
+            )
+
+        except Exception as e:
+            logger.error(f"Error analizando confirmación: {e}")
+            return AIDecision(
+                action='need_clarification',
+                confidence=0.0,
+                reasoning=f"Error procesando: {str(e)}",
+                data={}
+            )
+
+    def generate_response(self, intent: str, context: Dict, user_input: str) -> str:
+        """Generar respuesta personalizada usando IA"""
+
+        prompt = f"""
+Eres Herbie, un agente inteligente para crear repositorios de GitHub.
+
+Personalidad: {self.system_context['agent_personality']}
+
+Contexto de la situación:
+- Intención detectada: {intent}
+- Mensaje del usuario: "{user_input}"
+- Contexto adicional: {json.dumps(context, indent=2)}
+
+Frameworks disponibles:
+{self.system_context['frameworks']}
+
+Genera una respuesta que sea:
+1. Acorde a tu personalidad (amigable, inteligente, expresiva)
+2. Contextualmente apropiada
+3. Útil y accionable
+4. Con emojis y formato atractivo
+5. Que mantenga el flujo conversacional
+
+Responde directamente con el texto de la respuesta, NO con JSON.
+Usa markdown para formato cuando sea apropiado.
+"""
+
+        try:
+            response = self.llm.invoke([HumanMessage(content=prompt)])
+            return response.content.strip()
+
+        except Exception as e:
+            logger.error(f"Error generando respuesta: {e}")
+            return f"🤔 Hmm, tuve un problemilla técnico procesando tu mensaje. ¿Podrías intentar de nuevo? {str(e)}"
+
+    def generate_project_summary(self, project_data: Dict) -> str:
+        """Generar resumen del proyecto usando IA"""
+
+        prompt = f"""
+Eres Herbie, un agente entusiasta para crear proyectos.
+
+Datos del proyecto:
+{json.dumps(project_data, indent=2)}
+
+Framework info: {FrameworkDatabase.get_framework_description(project_data.get('framework', 'unknown'))}
+
+Genera un resumen atractivo y profesional del proyecto que incluya:
+1. Título llamativo
+2. Detalles del proyecto con emojis
+3. Descripción del framework elegido
+4. Opciones claras para confirmar o modificar
+5. Tono entusiasta pero profesional
+
+Usa formato markdown y emojis. Responde directamente con el texto.
+"""
+
+        try:
+            response = self.llm.invoke([HumanMessage(content=prompt)])
+            return response.content.strip()
+
+        except Exception as e:
+            logger.error(f"Error generando resumen: {e}")
+            return f"📋 Resumen del proyecto: {project_data.get('repo_name', 'mi-proyecto')}"
 
 
 class HerbieFrameworkHelper:
@@ -172,7 +468,7 @@ class HerbieFrameworkHelper:
         }
 
     def explain_missing_dependency(self, framework: str) -> str:
-        """Genera explicación detallada sobre dependencias faltantes"""
+        """Genera explicación detallada sobre dependencias faltantes usando IA"""
         framework_info = FrameworkDatabase.get_framework_info(framework)
         if not framework_info:
             return "Framework no reconocido. Verifique el nombre del framework."
@@ -181,49 +477,67 @@ class HerbieFrameworkHelper:
         install_cmd = framework_info["install_instructions"].get(system, "Consulte la documentación oficial")
 
         prompt = f"""
-Como experto en desarrollo de software, explica de forma clara y profesional:
+Eres un profesor experto en ingeniería de software y desarrollo.
 
-Framework: {framework}
-Sistema operativo: {system}
-Comando de instalación sugerido: {install_cmd}
+Situación:
+- Framework: {framework}
+- Sistema operativo: {system}
+- Comando de instalación: {install_cmd}
+- Info del framework: {json.dumps(framework_info, indent=2)}
 
-Proporciona:
-1. Explicación breve del problema
+Genera una explicación clara, educativa y profesional que incluya:
+1. Explicación del problema de manera amigable
 2. Pasos específicos de instalación para {system}
 3. Comandos exactos a ejecutar
-4. Verificación de instalación exitosa
-5. Posibles problemas comunes y soluciones
+4. Cómo verificar instalación exitosa
+5. Problemas comunes y soluciones
+6. Tono profesional pero accesible
 
-Mantén un tono profesional y educativo, como si fueras un profesor de ingeniería de software.
+Usa formato markdown y emojis apropiados.
 """
 
-        response = self.llm.invoke([HumanMessage(content=prompt)])
-        return response.content
+        try:
+            response = self.llm.invoke([HumanMessage(content=prompt)])
+            return response.content.strip()
+        except Exception as e:
+            logger.error(f"Error explicando dependencia: {e}")
+            return f"Necesitas instalar {framework}. Comando sugerido: {install_cmd}"
 
-    def generate_install_md(self, framework: str) -> str:
-        """Genera archivo INSTALL.md completo"""
+    def generate_install_md(self, framework: str, project_name: str) -> str:
+        """Genera archivo INSTALL.md completo usando IA"""
         framework_info = FrameworkDatabase.get_framework_info(framework)
         system = self.system_info["os"]
 
         prompt = f"""
-Como profesor de ingeniería de software, crea un archivo INSTALL.md profesional y completo para un proyecto {framework} en {system}.
+Eres un experto en documentación técnica.
 
-Incluye:
-1. Título y descripción del proyecto
-2. Requisitos del sistema
-3. Instalación paso a paso
-4. Configuración del entorno de desarrollo
-5. Comandos para ejecutar el proyecto
-6. Solución de problemas comunes
-7. Recursos adicionales
+Crea un archivo INSTALL.md profesional y completo para:
+- Proyecto: {project_name}
+- Framework: {framework}
+- Sistema: {system}
+- Info del framework: {json.dumps(framework_info, indent=2)}
 
-Estructura del framework disponible: {json.dumps(framework_info, indent=2)}
+El archivo debe incluir:
+1. Título atractivo y descripción del proyecto
+2. Tabla de contenidos
+3. Requisitos del sistema
+4. Instalación paso a paso
+5. Configuración del entorno
+6. Comandos para ejecutar
+7. Solución de problemas
+8. Recursos adicionales
+9. Licencia y contribuciones
 
 Usa formato Markdown profesional con emojis apropiados.
+Hazlo completo, útil y fácil de seguir.
 """
 
-        response = self.llm.invoke([HumanMessage(content=prompt)])
-        return response.content
+        try:
+            response = self.llm.invoke([HumanMessage(content=prompt)])
+            return response.content.strip()
+        except Exception as e:
+            logger.error(f"Error generando INSTALL.md: {e}")
+            return f"# Instalación de {project_name}\n\nFramework: {framework}\nSistema: {system}"
 
     def init_framework_project(self, project_info: ProjectInfo) -> Dict:
         """Inicializa proyecto con el framework especificado"""
@@ -235,7 +549,7 @@ Usa formato Markdown profesional con emojis apropiados.
             return {
                 "success": False,
                 "message": self.explain_missing_dependency(project_info.framework),
-                "install_md": self.generate_install_md(project_info.framework)
+                "install_md": self.generate_install_md(project_info.framework, project_info.repo_name)
             }
 
         # Ejecutar comando de inicialización
@@ -246,7 +560,7 @@ Usa formato Markdown profesional con emojis apropiados.
                 check=True,
                 capture_output=True,
                 text=True,
-                timeout=300  # 5 minutos timeout
+                timeout=300
             )
 
             # Ejecutar comandos adicionales si existen
@@ -280,7 +594,7 @@ class GitHubRepoCreator:
         self.llm = ChatGoogleGenerativeAI(
             model="gemini-1.5-flash",
             google_api_key=self.google_api_key,
-            temperature=0.3  # Reducir temperatura para más consistencia
+            temperature=0.3
         )
 
         self.headers = {
@@ -291,6 +605,7 @@ class GitHubRepoCreator:
 
         self.framework_helper = HerbieFrameworkHelper(self.llm)
         self.username = self._get_username()
+        self.ai_core = AIIntelligenceCore(self.llm)
 
     def _get_username(self) -> str:
         """Obtiene el nombre de usuario de GitHub"""
@@ -305,131 +620,10 @@ class GitHubRepoCreator:
             logger.error(f"Error conectando con GitHub: {e}")
             return 'unknown-user'
 
-    def parse_user_input(self, user_input: str) -> ParsedInput:
-        """Parsea entrada del usuario usando IA y detecta campos faltantes"""
-        frameworks_list = FrameworkDatabase.get_framework_names()
-
-        prompt = f"""
-Analiza este mensaje del usuario y extrae información para crear un proyecto:
-"{user_input}"
-
-Frameworks disponibles: {frameworks_list}
-
-Responde SOLO con un JSON válido con esta estructura exacta:
-{{
-  "repo_name": "nombre-del-repositorio o null si no está especificado",
-  "is_private": true/false/null (null si no está especificado),
-  "description": "descripción del proyecto o null si no está especificada",
-  "framework": "framework-elegido o null si no está especificado"
-}}
-
-Reglas importantes:
-- Si algún campo NO está claramente especificado en el mensaje, devuelve null para ese campo
-- repo_name: sin espacios, usar guiones. Solo si está claro en el mensaje
-- framework: debe ser exactamente uno de la lista disponible, o null si no está claro
-- is_private: solo true/false si está explícitamente mencionado, sino null
-- description: solo si hay una descripción clara del proyecto, sino null
-
-Sé estricto: si no está claro, usa null.
-"""
-
-        try:
-            response = self.llm.invoke([HumanMessage(content=prompt)])
-            content = response.content.strip()
-
-            # Extraer JSON del contenido
-            start = content.find('{')
-            end = content.rfind('}') + 1
-
-            if start == -1 or end == 0:
-                raise ValueError("No se encontró JSON válido en la respuesta")
-
-            json_str = content[start:end]
-            data = json.loads(json_str)
-
-            # Identificar campos faltantes
-            missing_fields = []
-            if not data.get('repo_name'):
-                missing_fields.append('repo_name')
-            if data.get('framework') is None:
-                missing_fields.append('framework')
-            if data.get('is_private') is None:
-                missing_fields.append('is_private')
-            if not data.get('description'):
-                missing_fields.append('description')
-
-            return ParsedInput(
-                repo_name=data.get('repo_name'),
-                description=data.get('description'),
-                is_private=data.get('is_private'),
-                framework=data.get('framework'),
-                missing_fields=missing_fields
-            )
-
-        except json.JSONDecodeError as e:
-            logger.error(f"Error parseando JSON: {e}")
-            raise ValueError("No se pudo interpretar la respuesta de la IA")
-        except Exception as e:
-            logger.error(f"Error procesando entrada: {e}")
-            raise ValueError("Error procesando la entrada del usuario")
-
-    def ask_for_missing_info(self, parsed_input: ParsedInput) -> ParsedInput:
-        """Pregunta al usuario por la información faltante"""
-
-        # Preguntar por nombre del repositorio
-        if 'repo_name' in parsed_input.missing_fields:
-            while True:
-                repo_name = input("📁 ¿Cuál será el nombre del repositorio? (sin espacios, usar guiones): ").strip()
-                if repo_name:
-                    # Limpiar el nombre del repositorio
-                    repo_name = repo_name.lower().replace(' ', '-').replace('_', '-')
-                    parsed_input.repo_name = repo_name
-                    break
-                else:
-                    print("❌ El nombre del repositorio es obligatorio.")
-
-        # Preguntar por framework
-        if 'framework' in parsed_input.missing_fields:
-            frameworks = FrameworkDatabase.get_framework_names()
-            print(f"\n🛠️ Frameworks disponibles: {', '.join(frameworks)}")
-
-            while True:
-                framework = input("¿Qué framework quieres usar? ").strip().lower()
-                if framework in frameworks:
-                    parsed_input.framework = framework
-                    break
-                else:
-                    print(f"❌ Framework no válido. Opciones disponibles: {', '.join(frameworks)}")
-
-        # Preguntar por privacidad
-        if 'is_private' in parsed_input.missing_fields:
-            while True:
-                privacy = input("🔒 ¿El repositorio será privado? (s/n): ").strip().lower()
-                if privacy in ['s', 'si', 'sí', 'y', 'yes']:
-                    parsed_input.is_private = True
-                    break
-                elif privacy in ['n', 'no']:
-                    parsed_input.is_private = False
-                    break
-                else:
-                    print("❌ Responde 's' para sí o 'n' para no.")
-
-        # Preguntar por descripción
-        if 'description' in parsed_input.missing_fields:
-            description = input("📝 Descripción del proyecto (opcional, presiona Enter para omitir): ").strip()
-            if description:
-                parsed_input.description = description
-            else:
-                parsed_input.description = f"Proyecto {parsed_input.framework} creado con Herbie"
-
-        return parsed_input
-
     def create_project_info(self, parsed_input: ParsedInput) -> ProjectInfo:
         """Convierte ParsedInput a ProjectInfo con comandos de inicialización"""
 
         # Generar comando de inicialización basado en el framework
-        framework_info = FrameworkDatabase.get_framework_info(parsed_input.framework)
-
         if parsed_input.framework == "react":
             init_command = f"npx create-react-app {parsed_input.repo_name}"
         elif parsed_input.framework == "vue":
@@ -442,7 +636,6 @@ Sé estricto: si no está claro, usa null.
             init_command = f"django-admin startproject {parsed_input.repo_name}"
         elif parsed_input.framework == "fastapi":
             init_command = f"mkdir {parsed_input.repo_name}"
-            # Para FastAPI, necesitamos crear la estructura manualmente
         elif parsed_input.framework == "rails":
             init_command = f"rails new {parsed_input.repo_name}"
         elif parsed_input.framework == "flutter":
@@ -487,7 +680,6 @@ Sé estricto: si no está claro, usa null.
     def _setup_git_config(self):
         """Configura Git con las credenciales necesarias"""
         try:
-            # Configurar usuario (opcional, pero recomendado)
             subprocess.run(["git", "config", "user.name", self.username], check=True)
             subprocess.run(["git", "config", "user.email", f"{self.username}@users.noreply.github.com"], check=True)
             logger.info("Configuración de Git establecida")
@@ -495,7 +687,7 @@ Sé estricto: si no está claro, usa null.
             logger.warning(f"No se pudo configurar Git: {e}")
 
     def push_local_to_repo(self, repo_name: str) -> bool:
-        """Sube código local a repositorio GitHub con autenticación mejorada"""
+        """Sube código local a repositorio GitHub"""
         try:
             if not os.path.exists(repo_name):
                 logger.error(f"Directorio {repo_name} no existe")
@@ -504,10 +696,8 @@ Sé estricto: si no está claro, usa null.
             original_dir = os.getcwd()
             os.chdir(repo_name)
 
-            # Configurar Git
             self._setup_git_config()
 
-            # URL con token para autenticación
             repo_url = f"https://{self.github_token}@github.com/{self.username}/{repo_name}.git"
 
             commands = [
@@ -520,14 +710,12 @@ Sé estricto: si no está claro, usa null.
             ]
 
             for cmd in commands:
-                # Ocultar token en los logs
                 log_cmd = cmd.copy()
                 if len(log_cmd) > 2 and "github.com" in log_cmd[2]:
                     log_cmd[2] = log_cmd[2].replace(self.github_token, "***TOKEN***")
 
                 logger.info(f"Ejecutando: {' '.join(log_cmd)}")
 
-                # Configurar entorno para evitar prompts interactivos
                 env = os.environ.copy()
                 env['GIT_TERMINAL_PROMPT'] = '0'
 
@@ -566,9 +754,7 @@ Sé estricto: si no está claro, usa null.
 
             logger.info("Usando método alternativo: GitHub API")
 
-            # Recorrer archivos del proyecto
             for root, dirs, files in os.walk(repo_name):
-                # Ignorar directorios como .git, node_modules, etc.
                 dirs[:] = [d for d in dirs if not d.startswith('.') and d != 'node_modules']
 
                 for file in files:
@@ -578,15 +764,12 @@ Sé estricto: si no está claro, usa null.
                     file_path = os.path.join(root, file)
                     relative_path = os.path.relpath(file_path, repo_name)
 
-                    # Leer archivo
                     try:
                         with open(file_path, 'rb') as f:
                             content = f.read()
 
-                        # Codificar en base64
                         encoded_content = base64.b64encode(content).decode('utf-8')
 
-                        # Subir via API
                         url = f"https://api.github.com/repos/{self.username}/{repo_name}/contents/{relative_path}"
                         data = {
                             "message": f"Add {relative_path}",
@@ -608,214 +791,320 @@ Sé estricto: si no está claro, usa null.
             logger.error(f"Error en método alternativo: {e}")
             return False
 
-    def create_full_flow(self, user_input: str) -> Dict:
-        """Flujo completo de creación de repositorio con preguntas interactivas"""
-        try:
-            # Parsear input inicial
-            parsed_input = self.parse_user_input(user_input)
-
-            # Si hay campos faltantes, preguntar por ellos
-            if parsed_input.missing_fields:
-                print(f"🔍 Información extraída de tu mensaje:")
-                if parsed_input.repo_name:
-                    print(f"   ✅ Nombre: {parsed_input.repo_name}")
-                if parsed_input.framework:
-                    print(f"   ✅ Framework: {parsed_input.framework}")
-                if parsed_input.is_private is not None:
-                    print(f"   ✅ Privacidad: {'Privado' if parsed_input.is_private else 'Público'}")
-                if parsed_input.description:
-                    print(f"   ✅ Descripción: {parsed_input.description}")
-
-                print(f"\n❓ Necesito más información para continuar...")
-                parsed_input = self.ask_for_missing_info(parsed_input)
-
-            # Crear ProjectInfo
-            project_info = self.create_project_info(parsed_input)
-
-            # Mostrar resumen final
-            print(f"\n📋 Resumen del proyecto:")
-            print(f"   📁 Nombre: {project_info.repo_name}")
-            print(f"   🛠️  Framework: {project_info.framework}")
-            print(f"   🔒 Privacidad: {'Privado' if project_info.is_private else 'Público'}")
-            print(f"   📝 Descripción: {project_info.description}")
-
-            # Confirmar creación
-            confirm = input("\n¿Proceder con la creación del repositorio? (s/n): ").strip().lower()
-            if confirm not in ['s', 'si', 'sí', 'y', 'yes']:
-                return {"success": False, "message": "❌ Creación cancelada por el usuario."}
-
-            # Inicializar proyecto local
-            framework_result = self.framework_helper.init_framework_project(project_info)
-
-            if not framework_result['success']:
-                return {
-                    "success": False,
-                    "message": framework_result['message'],
-                    "install_md": framework_result.get('install_md')
-                }
-
-            # Crear repositorio
-            repo = self.create_repository(project_info)
-            if not repo:
-                return {"success": False, "message": "No se pudo crear el repositorio en GitHub"}
-
-            # Subir código
-            if self.push_local_to_repo(project_info.repo_name):
-                return {
-                    "success": True,
-                    "repo_url": repo['html_url'],
-                    "project_info": project_info
-                }
-            else:
-                # Intentar método alternativo
-                if self.push_local_to_repo_alternative(project_info.repo_name):
-                    return {
-                        "success": True,
-                        "repo_url": repo['html_url'],
-                        "project_info": project_info
-                    }
-                else:
-                    return {"success": False, "message": "Error subiendo código a GitHub"}
-
-        except Exception as e:
-            logger.error(f"Error en flujo completo: {e}")
-            return {"success": False, "message": f"Error: {str(e)}"}
-
 
 class HerbieAgent:
+    """Agente inteligente completamente basado en IA"""
+
     def __init__(self):
         self.repo_creator = GitHubRepoCreator()
+        self.ai_core = self.repo_creator.ai_core
         self.conversation_history = []
+        self.pending_project = None
+        self.user_context = {}
 
     def chat(self, user_input: str) -> str:
-        """Manejar conversación con el usuario"""
+        """Manejar conversación completamente con IA"""
 
         # Añadir al historial
         self.conversation_history.append({"role": "user", "content": user_input})
 
-        # Analizar si el usuario quiere crear un repositorio
-        create_keywords = ["crea", "crear", "nuevo", "repositorio", "repo", "github", "proyecto"]
-
-        if any(keyword in user_input.lower() for keyword in create_keywords):
-            return self._handle_repository_creation(user_input)
-        else:
-            return self._general_response(user_input)
-
-    def _handle_repository_creation(self, user_input: str) -> str:
-        """Manejar la creación de repositorios"""
         try:
-            print("🔍 Analizando tu solicitud...")
+            # Analizar intención con IA
+            intent_analysis = self.ai_core.analyze_user_intent(user_input, self.conversation_history)
 
-            # Crear el repositorio (ahora con preguntas interactivas)
-            result = self.repo_creator.create_full_flow(user_input)
+            logger.info(f"Intención detectada: {intent_analysis.action} (confianza: {intent_analysis.confidence})")
 
-            if result['success']:
-                project_info = result['project_info']
-                privacy_text = "privado" if project_info.is_private else "público"
-                response = f"""✅ ¡Repositorio creado exitosamente!
-
-📁 Nombre: {project_info.repo_name}
-🛠️  Framework: {project_info.framework}
-🔒 Tipo: {privacy_text}
-🌐 URL: {result['repo_url']}
-
-¡Tu proyecto está listo para usar! Ya puedes clonarlo y empezar a trabajar."""
-
-                self.conversation_history.append({"role": "assistant", "content": response})
-                return response
+            # Enrutar según la intención
+            if intent_analysis.action == "crear_proyecto":
+                return self._handle_project_creation(user_input, intent_analysis)
+            elif intent_analysis.action == "confirmar_proyecto":
+                return self._handle_project_confirmation(user_input, intent_analysis)
+            elif intent_analysis.action == "modificar_proyecto":
+                return self._handle_project_modification(user_input, intent_analysis)
+            elif intent_analysis.action == "cancelar_proyecto":
+                return self._handle_project_cancellation(user_input, intent_analysis)
             else:
-                if 'install_md' in result:
-                    install_file = f"INSTALL.md"
-                    with open(install_file, "w", encoding="utf-8") as f:
-                        f.write(result['install_md'])
-                    response = f"""❌ No se pudo crear el proyecto completo.
-
-{result['message']}
-
-📄 He creado un archivo de instalación: {install_file}
-Revisa las instrucciones para configurar el framework correctamente."""
-                else:
-                    response = f"❌ Error: {result['message']}"
-
-                self.conversation_history.append({"role": "assistant", "content": response})
-                return response
+                return self._handle_general_conversation(user_input, intent_analysis)
 
         except Exception as e:
-            error_msg = f"❌ Error procesando tu solicitud: {str(e)}"
-            self.conversation_history.append({"role": "assistant", "content": error_msg})
-            return error_msg
+            logger.error(f"Error en chat: {e}")
+            response = self.ai_core.generate_response(
+                intent="error",
+                context={"error": str(e), "user_input": user_input},
+                user_input=user_input
+            )
+            self.conversation_history.append({"role": "assistant", "content": response})
+            return response
 
-    def _general_response(self, user_input: str) -> str:
-        """Respuesta conversacional general"""
+    def _handle_project_creation(self, user_input: str, intent_analysis: AIDecision) -> str:
+        """Manejar creación de proyecto completamente con IA"""
 
-        help_keywords = ["ayuda", "help", "como", "qué puedes hacer", "comandos"]
+        # Parsear requerimientos con IA
+        parsed_input = self.ai_core.parse_project_requirements(user_input)
 
-        if any(keyword in user_input.lower() for keyword in help_keywords):
-            frameworks = FrameworkDatabase.get_framework_names()
-            response = f"""🤖 ¡Hola! Soy Herbie, tu asistente inteligente para crear repositorios de GitHub.
+        # Almacenar como proyecto pendiente
+        self.pending_project = {
+            'repo_name': parsed_input.repo_name,
+            'framework': parsed_input.framework,
+            'is_private': parsed_input.is_private,
+            'description': parsed_input.description,
+            'confidence': parsed_input.confidence,
+            'assumptions': parsed_input.assumptions
+        }
 
-Puedo ayudarte a:
-✅ Crear repositorios públicos o privados
-✅ Inicializar proyectos con diferentes frameworks
-✅ Configurar el código inicial automáticamente
-✅ Subir todo a GitHub listo para usar
-✅ Te pregunto por cualquier información faltante
+        # Generar resumen del proyecto con IA
+        summary = self.ai_core.generate_project_summary(self.pending_project)
 
-🛠️ Frameworks soportados:
-{', '.join(frameworks)}
+        self.conversation_history.append({"role": "assistant", "content": summary})
+        return summary
 
-💬 Ejemplos de uso:
-• "Crea un repositorio público con React"
-• "Necesito un proyecto privado con Next.js"
-• "Haz un repo con FastAPI"
-• "Nuevo proyecto" (te preguntaré los detalles)
+    def _handle_project_confirmation(self, user_input: str, intent_analysis: AIDecision) -> str:
+        """Manejar confirmación del proyecto con IA"""
 
-¿Qué proyecto quieres crear hoy?"""
+        if not self.pending_project:
+            response = self.ai_core.generate_response(
+                intent="no_pending_project",
+                context={},
+                user_input=user_input
+            )
+            self.conversation_history.append({"role": "assistant", "content": response})
+            return response
+
+        # Ejecutar creación del proyecto
+        return self._execute_project_creation()
+
+    def _handle_project_modification(self, user_input: str, intent_analysis: AIDecision) -> str:
+        """Manejar modificación del proyecto con IA"""
+
+        if not self.pending_project:
+            response = self.ai_core.generate_response(
+                intent="no_pending_project",
+                context={},
+                user_input=user_input
+            )
+            self.conversation_history.append({"role": "assistant", "content": response})
+            return response
+
+        # Analizar qué quiere modificar
+        modification_analysis = self.ai_core.analyze_project_confirmation(user_input, self.pending_project)
+
+        if modification_analysis.confidence > 0.6 and modification_analysis.data.get('specific_field_to_modify'):
+            # Aplicar modificación
+            field = modification_analysis.data['specific_field_to_modify']
+            new_value = modification_analysis.data.get('new_value')
+
+            if field == 'repo_name' and new_value:
+                self.pending_project['repo_name'] = new_value.lower().replace(' ', '-')
+            elif field == 'framework' and new_value:
+                if new_value.lower() in FrameworkDatabase.get_framework_names():
+                    self.pending_project['framework'] = new_value.lower()
+                    self.pending_project['description'] = f"Proyecto {new_value} creado con Herbie"
+                else:
+                    return self.ai_core.generate_response(
+                        intent="invalid_framework",
+                        context={"requested_framework": new_value,
+                                 "available_frameworks": FrameworkDatabase.get_framework_names()},
+                        user_input=user_input
+                    )
+            elif field == 'is_private' and new_value:
+                # Usar IA para determinar si quiere privado o público
+                privacy_prompt = f"El usuario dijo: '{new_value}'. ¿Quiere que el repositorio sea privado o público? Responde solo 'privado' o 'publico'."
+                try:
+                    privacy_response = self.repo_creator.llm.invoke([HumanMessage(content=privacy_prompt)])
+                    self.pending_project['is_private'] = 'privado' in privacy_response.content.lower()
+                except:
+                    self.pending_project['is_private'] = True  # Default a privado si hay error
+            elif field == 'description' and new_value:
+                self.pending_project['description'] = new_value
+
+            # Generar nuevo resumen
+            summary = self.ai_core.generate_project_summary(self.pending_project)
+            self.conversation_history.append({"role": "assistant", "content": summary})
+            return summary
         else:
-            response = """¡Hola! 👋 
+            # Pedir aclaración
+            response = self.ai_core.generate_response(
+                intent="need_clarification",
+                context={"modification_analysis": modification_analysis.data},
+                user_input=user_input
+            )
+            self.conversation_history.append({"role": "assistant", "content": response})
+            return response
 
-Soy Herbie, tu asistente para crear repositorios de GitHub con frameworks populares.
+    def _handle_project_cancellation(self, user_input: str, intent_analysis: AIDecision) -> str:
+        """Manejar cancelación del proyecto con IA"""
 
-Puedo ayudarte a crear un proyecto completo desde cero. Solo dime qué quieres hacer y te preguntaré por cualquier información que falte:
-- Nombre del proyecto
-- Framework a usar
-- Si será público o privado
-- Descripción del proyecto
+        self.pending_project = None
 
-No te preocupes si no tienes todos los detalles, ¡te ayudo a completarlos!
-
-Escribe 'ayuda' para ver ejemplos de uso.
-
-¿En qué proyecto estás pensando?"""
+        response = self.ai_core.generate_response(
+            intent="project_cancelled",
+            context={"reason": intent_analysis.reasoning},
+            user_input=user_input
+        )
 
         self.conversation_history.append({"role": "assistant", "content": response})
         return response
+
+    def _handle_general_conversation(self, user_input: str, intent_analysis: AIDecision) -> str:
+        """Manejar conversación general con IA"""
+
+        response = self.ai_core.generate_response(
+            intent=intent_analysis.action,
+            context={
+                "intent_data": intent_analysis.data,
+                "frameworks": FrameworkDatabase.get_framework_names(),
+                "conversation_history": self.conversation_history[-3:] if len(
+                    self.conversation_history) > 3 else self.conversation_history
+            },
+            user_input=user_input
+        )
+
+        self.conversation_history.append({"role": "assistant", "content": response})
+        return response
+
+    def _execute_project_creation(self) -> str:
+        """Ejecutar la creación del proyecto"""
+        if not self.pending_project:
+            return "❌ No hay proyecto pendiente para crear."
+
+        try:
+            # Generar mensaje de inicio usando IA
+            start_message = self.ai_core.generate_response(
+                intent="starting_project_creation",
+                context={"project": self.pending_project},
+                user_input="iniciando creación"
+            )
+            print(start_message)
+
+            # Convertir a ProjectInfo
+            parsed_input = ParsedInput(
+                repo_name=self.pending_project['repo_name'],
+                description=self.pending_project['description'],
+                is_private=self.pending_project['is_private'],
+                framework=self.pending_project['framework'],
+                missing_fields=[]
+            )
+
+            project_info = self.repo_creator.create_project_info(parsed_input)
+
+            # Inicializar proyecto local
+            framework_result = self.repo_creator.framework_helper.init_framework_project(project_info)
+
+            if not framework_result['success']:
+                self.pending_project = None
+                error_response = self.ai_core.generate_response(
+                    intent="framework_setup_failed",
+                    context={
+                        "error_message": framework_result['message'],
+                        "project": project_info.__dict__
+                    },
+                    user_input="error de framework"
+                )
+
+                # Generar archivo de instalación si está disponible
+                if 'install_md' in framework_result:
+                    install_file = f"INSTALL_{project_info.repo_name}.md"
+                    with open(install_file, "w", encoding="utf-8") as f:
+                        f.write(framework_result['install_md'])
+                    error_response += f"\n\n📄 He creado un archivo de instalación: {install_file}"
+
+                return error_response
+
+            # Crear repositorio
+            repo = self.repo_creator.create_repository(project_info)
+            if not repo:
+                self.pending_project = None
+                return self.ai_core.generate_response(
+                    intent="github_repo_creation_failed",
+                    context={"project": project_info.__dict__},
+                    user_input="error creando repositorio"
+                )
+
+            # Subir código
+            upload_success = self.repo_creator.push_local_to_repo(project_info.repo_name)
+            if not upload_success:
+                upload_success = self.repo_creator.push_local_to_repo_alternative(project_info.repo_name)
+
+            # Generar mensaje de éxito/error usando IA
+            if upload_success:
+                success_response = self.ai_core.generate_response(
+                    intent="project_creation_success",
+                    context={
+                        "project": project_info.__dict__,
+                        "repo_url": repo['html_url'],
+                        "clone_url": repo['clone_url']
+                    },
+                    user_input="proyecto creado exitosamente"
+                )
+            else:
+                success_response = self.ai_core.generate_response(
+                    intent="project_creation_partial_success",
+                    context={
+                        "project": project_info.__dict__,
+                        "repo_url": repo['html_url']
+                    },
+                    user_input="proyecto creado con problemas de subida"
+                )
+
+            # Limpiar proyecto pendiente
+            self.pending_project = None
+
+            self.conversation_history.append({"role": "assistant", "content": success_response})
+            return success_response
+
+        except Exception as e:
+            logger.error(f"Error ejecutando creación: {e}")
+            self.pending_project = None
+
+            error_response = self.ai_core.generate_response(
+                intent="unexpected_error",
+                context={"error": str(e)},
+                user_input="error inesperado"
+            )
+
+            self.conversation_history.append({"role": "assistant", "content": error_response})
+            return error_response
 
 
 def main():
     """Función principal para interactuar con el usuario"""
 
-    print("🤖 Herbie - Asistente Inteligente para GitHub")
-    print("=" * 50)
-
+    # Generar mensaje de bienvenida con IA
     try:
-        # Inicializar el agente
         agent = HerbieAgent()
 
-        print("\n¡Hola! Soy Herbie, tu asistente para crear repositorios de GitHub.")
-        print("Puedo ayudarte a crear proyectos completos con diferentes frameworks.")
-        print("Si falta alguna información, te preguntaré por ella.")
-        print("\nEscribe 'ayuda' para ver qué puedo hacer o 'salir' para terminar.")
+        welcome_message = agent.ai_core.generate_response(
+            intent="welcome_message",
+            context={"frameworks": FrameworkDatabase.get_framework_names()},
+            user_input="bienvenida"
+        )
+
+        print("🤖 Herbie - Agente Inteligente para GitHub")
+        print("=" * 50)
+        print(f"\n{welcome_message}")
 
         while True:
-            user_input = input("\n📝 Tú: ").strip()
+            user_input = input("\n💬 Tú: ").strip()
 
-            if user_input.lower() in ['salir', 'exit', 'quit']:
-                print("👋 ¡Hasta luego! Que tengas un buen día.")
-                break
+            # Analizar si quiere salir usando IA
+            if user_input:
+                exit_analysis = agent.ai_core.analyze_user_intent(user_input, [])
+                if exit_analysis.action == "despedida" and exit_analysis.confidence > 0.7:
+                    farewell_message = agent.ai_core.generate_response(
+                        intent="farewell",
+                        context={},
+                        user_input=user_input
+                    )
+                    print(f"\n🤖 Herbie: {farewell_message}")
+                    break
 
             if not user_input:
-                print("Por favor, dime qué quieres hacer.")
+                prompt_response = agent.ai_core.generate_response(
+                    intent="empty_input",
+                    context={},
+                    user_input=""
+                )
+                print(f"🤖 Herbie: {prompt_response}")
                 continue
 
             print()
@@ -823,12 +1112,12 @@ def main():
             print(f"🤖 Herbie: {response}")
 
     except KeyboardInterrupt:
-        print("\n\n👋 ¡Hasta luego!")
+        print("\n\n👋 ¡Hasta luego! Que tengas un día increíble! 🌟")
     except Exception as e:
         print(f"\n❌ Error inicializando Herbie: {e}")
-        print("\nAsegúrate de tener las variables de entorno configuradas:")
-        print("- GITHUB_TOKEN: Token de GitHub con permisos de repositorio")
-        print("- GOOGLE_API_KEY: API key de Google Generative AI")
+        print("\n🔧 Asegúrate de tener configurado:")
+        print("   • GITHUB_TOKEN: Token de GitHub con permisos de repositorio")
+        print("   • GOOGLE_API_KEY: API key de Google Generative AI")
 
 
 if __name__ == "__main__":
